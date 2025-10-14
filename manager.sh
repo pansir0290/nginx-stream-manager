@@ -27,19 +27,16 @@ setup_environment() {
         mkdir -p /etc/nginx/conf.d
     fi
     
-    # 确保 stream 配置文件的存在和正确结构
-    if [ ! -f "$CONFIG_FILE" ] || ! grep -q "^stream {" "$CONFIG_FILE"; then
-        echo "创建初始 Stream 配置文件: $CONFIG_FILE"
-        {
-            echo "stream {"
-            echo "}"
-        } | tee "$CONFIG_FILE" > /dev/null
+    # 【核心修改】确保 stream 配置文件存在，但不写入 stream {} 块
+    # 假设 deploy.sh 已确保 Nginx 主配置正确引入了 stream 块
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "创建空的 Stream 规则文件: $CONFIG_FILE"
+        sudo touch "$CONFIG_FILE"
     fi
 
-    # 提醒主配置文件的 include
+    # 提醒主配置文件的 include (此检查现在主要由 deploy.sh 负责，但保留提醒)
     if ! grep -q "include /etc/nginx/conf.d/\*.conf;" "$MAIN_CONF"; then
         echo -e "${YELLOW}警告：Nginx 主配置 ($MAIN_CONF) 可能缺少 'include /etc/nginx/conf.d/*.conf;'$NC"
-        echo -e "${YELLOW}请确保 Nginx 主配置正确加载了 Stream 模块和 conf.d 目录下的配置文件。${NC}"
     fi
 }
 
@@ -51,6 +48,7 @@ generate_config_block() {
 
     # 使用 Tab 缩进，与 Nginx 配置风格保持一致
     cat << EOF
+
     server {
         listen ${LISTEN_PORT};
         listen ${LISTEN_PORT} udp;
@@ -84,7 +82,7 @@ add_rule() {
         return
     fi
     
-    # 检查规则是否已存在
+    # 检查规则是否已存在 (检查 listen 行)
     if grep -q "listen ${LISTEN_PORT};" "$CONFIG_FILE"; then
         echo -e "${RED}错误：端口 ${LISTEN_PORT} 的规则已存在，请勿重复添加。${NC}"
         return
@@ -111,19 +109,13 @@ add_rule() {
 
     CONFIG_BLOCK=$(generate_config_block "$LISTEN_PORT" "$TARGET_ADDR" "$USE_SSL" "$SSL_NAME")
 
-    # 查找 stream {} 块的最后一个 '}' 所在行
-    local END_LINE=$(grep -n "^}" "$CONFIG_FILE" | tail -n 1 | cut -d: -f1)
+    # 【核心修改】直接将配置块追加到文件末尾
+    echo "$CONFIG_BLOCK" | sudo tee -a "$CONFIG_FILE" > /dev/null
     
-    if [ -n "$END_LINE" ] && [ "$END_LINE" -gt 1 ]; then
-        # 在最后一个 '}' 之前插入配置块
-        echo "$CONFIG_BLOCK" | sed -i "$((END_LINE - 1))r /dev/stdin" "$CONFIG_FILE"
-        echo -e "${GREEN}端口 ${LISTEN_PORT} 的规则已成功添加到 $CONFIG_FILE。${NC}"
-        read -r -p "是否立即应用配置并重载 Nginx? (y/n): " APPLY_NOW
-        if [[ "$APPLY_NOW" =~ ^[Yy]$ ]]; then
-            apply_config
-        fi
-    else
-        echo -e "${RED}错误：无法找到 '}' 来插入配置。请手动检查文件 $CONFIG_FILE。${NC}"
+    echo -e "${GREEN}端口 ${LISTEN_PORT} 的规则已成功添加到 $CONFIG_FILE。${NC}"
+    read -r -p "是否立即应用配置并重载 Nginx? (y/n): " APPLY_NOW
+    if [[ "$APPLY_NOW" =~ ^[Yy]$ ]]; then
+        apply_config
     fi
 }
 
@@ -131,14 +123,13 @@ add_rule() {
 view_rules() {
     echo -e "\n${GREEN}--- 当前 Stream 转发配置 (${CONFIG_FILE}) ---${NC}"
     if [ -f "$CONFIG_FILE" ]; then
+        # 由于文件现在只包含 server {} 块，直接显示内容
         if [ "$(grep -c "server {" "$CONFIG_FILE")" -eq 0 ]; then
              echo "当前未配置任何转发规则。"
              return
         fi
 
         awk '
-        /^stream \{/ {next} 
-        /^\}$/ {next} 
         /server \{/ {
             count++; 
             print "\n--- 规则 " count " ---"
@@ -190,11 +181,11 @@ delete_rule() {
     # 计算实际的结束行号
     SERVER_END=$((SERVER_START + SERVER_END_OFFSET - 1))
     
-    if [ -n "$SERVER_START" ] && [ -n "$SERVER_END" ] && [ "$SERVER_START" -lt "$SERVER_END" ]; then
+    if [ -n "$SERVER_START" ] && [ "$SERVER_END" ] && [ "$SERVER_START" -lt "$SERVER_END" ]; then
         echo -e "${GREEN}正在删除端口 ${PORT_TO_DELETE} 的规则块 (行 $SERVER_START 到 $SERVER_END)...${NC}"
         
         # 删除行范围
-        sed -i "${SERVER_START},${SERVER_END}d" "$CONFIG_FILE"
+        sudo sed -i "${SERVER_START},${SERVER_END}d" "$CONFIG_FILE"
         
         echo -e "${GREEN}规则已删除。${NC}"
         read -r -p "是否立即应用配置并重载 Nginx? (y/n): " APPLY_NOW
