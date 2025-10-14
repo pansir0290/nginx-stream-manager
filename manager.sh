@@ -34,37 +34,32 @@ setup_environment() {
 
     # 提醒主配置文件的 include
     if ! grep -q "include /etc/nginx/conf.d/*.conf;" "$MAIN_CONF"; then
-        echo -e "${YELLOW}警告：Nginx 主配置 ($MAIN_CONF) 可能缺少 'include /etc/nginx/conf.d/*.conf;'$NC"
+        # 考虑到用户的配置，我们更精确地检查 stream_proxy.conf 是否被 include
+        if ! grep -q "include /etc/nginx/conf.d/stream_proxy.conf;" "$MAIN_CONF"; then
+            echo -e "${YELLOW}警告：Nginx 主配置 ($MAIN_CONF) 可能缺少 'include /etc/nginx/conf.d/stream_proxy.conf;'${NC}"
+        fi
     fi
 }
 
-# --- 核心函数：生成配置块 (使用 Upstream 块修复语法并优化换行) ---
+# --- 核心函数：生成配置块 (回退到直接代理 IP:Port) ---
 generate_config_block() {
     local LISTEN_PORT=$1
     local TARGET_ADDR=$2
     local USE_SSL=$3
     local SSL_NAME=$4
-    local UPSTREAM_NAME=$5 # 新增参数
     local CONFIG_BLOCK=""
     
-    local TARGET_IP=$(echo "$TARGET_ADDR" | cut -d: -f1)
-    local TARGET_PORT=$(echo "$TARGET_ADDR" | cut -d: -f2)
-
     echo -e "${YELLOW}警告: 规则将仅监听 TCP 端口（UDP已注释）。${NC}" >&2
     
     local UDP_LINE="# Nginx不支持UDP: listen ${LISTEN_PORT} udp;"
     
-    # 1. 使用 here-doc (<<-) 来构建配置块，并消除开头的多余换行
+    # 使用 here-doc (<<-) 来构建配置块，仅生成 server 块
     CONFIG_BLOCK=$(cat <<- EOM
-    upstream ${UPSTREAM_NAME} {
-        # 规则标识符: ${LISTEN_PORT} -> ${TARGET_ADDR}
-        server ${TARGET_ADDR};
-    }
     
     server {
         listen ${LISTEN_PORT};
 ${UDP_LINE}
-        # 超时指令已在 /etc/nginx/nginx.conf 的 stream {} 块中全局设置
+        # 规则标识符: ${LISTEN_PORT} -> ${TARGET_ADDR}
 EOM
 )
 
@@ -73,14 +68,16 @@ EOM
         CONFIG_BLOCK+="\n        proxy_ssl_name ${SSL_NAME};"
     fi
 
-    # 3. proxy_pass 指向 Upstream 名称
-    CONFIG_BLOCK+="\n        proxy_pass ${UPSTREAM_NAME};\n    }"
+    CONFIG_BLOCK+="\n        proxy_connect_timeout 20s;"
+    CONFIG_BLOCK+="\n        proxy_timeout 5m;"
+    # 核心修改：proxy_pass 直接指向 IP:Port
+    CONFIG_BLOCK+="\n        proxy_pass ${TARGET_ADDR};\n    }"
     
     # 返回生成的配置块
     echo -e "$CONFIG_BLOCK"
 }
 
-# --- 功能 1: 安装依赖 (增强版，包含 selinux-utils) ---
+# --- 功能 1: 安装依赖 (未更改，用于 SELinux) ---
 install_dependencies() {
     echo -e "\n${GREEN}--- 安装 SELinux/系统依赖 ---${NC}"
     
@@ -114,7 +111,7 @@ install_dependencies() {
 }
 
 
-# --- 功能 2: 配置 SELinux ---
+# --- 功能 2: 配置 SELinux (未更改，用于 SELinux) ---
 configure_selinux() {
     echo -e "\n${GREEN}--- 配置 SELinux 策略 ---${NC}"
     
@@ -204,16 +201,13 @@ add_rule() {
     if [[ "$USE_SSL" =~ ^[Yy]$ ]]; then
         read -r -p "请输入 proxy_ssl_name (例如: yahoo.com 或 your_domain.com): " SSL_NAME
         if [ -z "$SSL_NAME" ]; then
-            SSL_NAME="default_sni" 
-            echo -e "${YELLOW}使用默认 proxy_ssl_name: ${SSL_NAME}${NC}" >&2 # 将此警告输出到 stderr
+            SSL_NAME="www.yahoo.com" 
+            echo -e "${YELLOW}使用默认 proxy_ssl_name: ${SSL_NAME}${NC}" >&2 
         fi
     fi
 
-    # 新增：生成唯一的 upstream 名称
-    local UPSTREAM_NAME="proxy_${LISTEN_PORT}"
-    
     # 捕获 generate_config_block 的输出 (配置块)
-    CONFIG_BLOCK=$(generate_config_block "$LISTEN_PORT" "$TARGET_ADDR" "$USE_SSL" "$SSL_NAME" "$UPSTREAM_NAME")
+    CONFIG_BLOCK=$(generate_config_block "$LISTEN_PORT" "$TARGET_ADDR" "$USE_SSL" "$SSL_NAME")
 
     # 将配置块追加到文件末尾
     echo -e "$CONFIG_BLOCK" | sudo tee -a "$CONFIG_FILE" > /dev/null
@@ -225,22 +219,17 @@ add_rule() {
     fi
 }
 
-# --- 功能 4: 查看规则 ---
+# --- 功能 4: 查看规则 (简化，不再区分 Upstream) ---
 view_rules() {
     echo -e "\n${GREEN}--- 当前 Stream 转发配置 (${CONFIG_FILE}) ---${NC}"
     if [ -f "$CONFIG_FILE" ]; then
-        if [ "$(grep -c "server {" "$CONFIG_FILE")" -eq 0 ] && [ "$(grep -c "upstream " "$CONFIG_FILE")" -eq 0 ]; then
+        if [ "$(grep -c "server {" "$CONFIG_FILE")" -eq 0 ]; then
              echo "当前未配置任何转发规则。"
              return
         fi
 
-        # 稍微调整 awk 逻辑以更好地显示 upstream 块和 server 块
+        # 仅显示 server 块内容
         awk '
-        /upstream / {
-            print "\n--- UPSTREAM 块 ---"
-            print $0
-            next
-        }
         /server \{/ {
             print "\n--- SERVER 块 ---"
             print $0
@@ -256,11 +245,11 @@ view_rules() {
     echo ""
 }
 
-# --- 功能 5: 删除规则 ---
+# --- 功能 5: 删除规则 (简化删除逻辑，仅删除 server 块) ---
 delete_rule() {
     view_rules
     
-    if [ "$(grep -c "server {" "$CONFIG_FILE")" -eq 0 ] && [ "$(grep -c "upstream " "$CONFIG_FILE")" -eq 0 ]; then
+    if [ "$(grep -c "server {" "$CONFIG_FILE")" -eq 0 ]; then
         echo -e "${RED}没有可供删除的转发规则。${NC}"
         return
     fi
@@ -276,37 +265,16 @@ delete_rule() {
         return
     fi
     
-    # 获取 upstream 名称，用于查找 upstream 块。我们知道 upstream 名称是 proxy_<端口号>
-    UPSTREAM_NAME="proxy_${PORT_TO_DELETE}"
-    
     # 1. 查找 Server 块的起始和结束行
     SERVER_START=$(sed -n "1,${LISTEN_LINE}p" "$CONFIG_FILE" | grep -n "server {" | tail -n 1 | cut -d: -f1)
     SERVER_END_OFFSET=$(sed -n "${SERVER_START},\$p" "$CONFIG_FILE" | grep -n "}" | head -n 1 | cut -d: -f1)
     SERVER_END=$((SERVER_START + SERVER_END_OFFSET - 1))
-    
-    # 2. 查找 Upstream 块的起始和结束行
-    UPSTREAM_START=$(grep -n "upstream ${UPSTREAM_NAME}" "$CONFIG_FILE" | cut -d: -f1 | head -n 1)
-    if [ -n "$UPSTREAM_START" ]; then
-        UPSTREAM_END_OFFSET=$(sed -n "${UPSTREAM_START},\$p" "$CONFIG_FILE" | grep -n "}" | head -n 1 | cut -d: -f1)
-        UPSTREAM_END=$((UPSTREAM_START + UPSTREAM_END_OFFSET - 1))
-    else
-        # 如果找不到 upstream，我们只删除 server 块
-        UPSTREAM_START=0
-        UPSTREAM_END=0
-    fi
     
     if [ -n "$SERVER_START" ] && [ "$SERVER_END" ] && [ "$SERVER_START" -lt "$SERVER_END" ]; then
         echo -e "${GREEN}正在删除端口 ${PORT_TO_DELETE} 的 SERVER 规则块 (行 $SERVER_START 到 $SERVER_END)...${NC}"
         
         # 删除 Server 块
         sudo sed -i "${SERVER_START},${SERVER_END}d" "$CONFIG_FILE"
-        
-        # 删除 Upstream 块（如果找到）
-        if [ "$UPSTREAM_START" -gt 0 ] && [ "$UPSTREAM_END" -gt 0 ]; then
-             echo -e "${GREEN}正在删除 UPSTREAM 规则块 (行 $UPSTREAM_START 到 $UPSTREAM_END)...${NC}"
-             # 由于删除了前面的行，这里的行号可能不准确了。最简单粗暴的方法是使用模式匹配删除。
-             sudo sed -i "/upstream ${UPSTREAM_NAME} {/,/}/d" "$CONFIG_FILE"
-        fi
         
         sudo sed -i '/^$/d' "$CONFIG_FILE" # 清理多余空行
 
@@ -321,7 +289,7 @@ delete_rule() {
 }
 
 
-# --- 功能 6: 应用配置并重载 Nginx ---
+# --- 功能 6: 应用配置并重载 Nginx (未更改) ---
 apply_config() {
     echo -e "\n${GREEN}--- 测试 Nginx 配置 ---${NC}"
     
