@@ -39,7 +39,7 @@ setup_environment() {
     fi
 }
 
-# --- 核心修改：简化生成配置块，确保格式干净 ---
+# --- 核心修改：使用 echo >&2 隔离警告，确保输出的配置干净 ---
 generate_config_block() {
     local LISTEN_PORT=$1
     local TARGET_ADDR=$2
@@ -47,37 +47,24 @@ generate_config_block() {
     local SSL_NAME=$4
     local CONFIG_BLOCK=""
 
-    # --- 最终稳定方案：永久禁用 UDP ---
-    local UDP_LINE="# Nginx不支持UDP: listen ${LISTEN_PORT} udp;"
-    echo -e "${YELLOW}警告: 规则将仅监听 TCP 端口（UDP已注释）。${NC}"
-    # --- ---
+    # 警告信息必须输出到标准错误流 (>&2)，以确保它不会被捕获到 CONFIG_BLOCK 变量中
+    echo -e "${YELLOW}警告: 规则将仅监听 TCP 端口（UDP已注释）。${NC}" >&2
     
-    # 使用 'printf' 配合换行符，而不是依赖 cat << EOF 块内部的空白行
-    CONFIG_BLOCK=$(printf "
-    server {
-        listen ${LISTEN_PORT};
-${UDP_LINE}
-        proxy_connect_timeout 20s;
-        proxy_timeout 5m;
-        
-        # 规则标识符: ${LISTEN_PORT} -> ${TARGET_ADDR}
-")
+    local UDP_LINE="# Nginx不支持UDP: listen ${LISTEN_PORT} udp;"
+    
+    # 构建配置块，使用 \n 和 tab 缩进
+    CONFIG_BLOCK="\n    server {\n        listen ${LISTEN_PORT};\n${UDP_LINE}\n        proxy_connect_timeout 20s;\n        proxy_timeout 5m;\n        # 规则标识符: ${LISTEN_PORT} -> ${TARGET_ADDR}"
 
     if [[ "$USE_SSL" =~ ^[Yy]$ ]]; then
-        CONFIG_BLOCK+=$(printf "
-        ssl_preread on;
-        proxy_ssl_name ${SSL_NAME};
-")
+        CONFIG_BLOCK+="\n        ssl_preread on;\n        proxy_ssl_name ${SSL_NAME};"
     fi
 
-    CONFIG_BLOCK+=$(printf "
-        proxy_pass ${TARGET_ADDR};
-    }
-")
-
+    CONFIG_BLOCK+="\n        proxy_pass ${TARGET_ADDR};\n    }"
+    
     # 返回生成的配置块
-    echo "$CONFIG_BLOCK"
+    echo -e "$CONFIG_BLOCK"
 }
+# --- 核心修改结束 ---
 
 # --- 功能 1: 添加规则 ---
 add_rule() {
@@ -105,13 +92,14 @@ add_rule() {
         read -r -p "请输入 proxy_ssl_name (例如: yahoo.com 或 your_domain.com): " SSL_NAME
         if [ -z "$SSL_NAME" ]; then
             SSL_NAME="default_sni" 
-            echo -e "${YELLOW}使用默认 proxy_ssl_name: ${SSL_NAME}${NC}"
+            echo -e "${YELLOW}使用默认 proxy_ssl_name: ${SSL_NAME}${NC}" >&2 # 同样将此警告输出到 stderr
         fi
     fi
 
+    # 捕获 generate_config_block 的输出 (配置块)
     CONFIG_BLOCK=$(generate_config_block "$LISTEN_PORT" "$TARGET_ADDR" "$USE_SSL" "$SSL_NAME")
 
-    # 直接将配置块追加到文件末尾 (使用 echo -e 来处理换行符)
+    # 将配置块追加到文件末尾
     echo -e "$CONFIG_BLOCK" | sudo tee -a "$CONFIG_FILE" > /dev/null
     
     echo -e "${GREEN}端口 ${LISTEN_PORT} 的规则已成功添加到 $CONFIG_FILE。${NC}"
@@ -121,7 +109,7 @@ add_rule() {
     fi
 }
 
-# --- 功能 2, 3, 4 (查看, 删除, 应用) 保持不变 ---
+# --- 功能 2: 查看规则 ---
 view_rules() {
     echo -e "\n${GREEN}--- 当前 Stream 转发配置 (${CONFIG_FILE}) ---${NC}"
     if [ -f "$CONFIG_FILE" ]; then
@@ -147,6 +135,7 @@ view_rules() {
     echo ""
 }
 
+# --- 功能 3: 删除规则 ---
 delete_rule() {
     view_rules
     
@@ -185,6 +174,7 @@ delete_rule() {
     fi
 }
 
+# --- 功能 4: 应用配置并重载 Nginx ---
 apply_config() {
     echo -e "\n${GREEN}--- 测试 Nginx 配置 ---${NC}"
     
