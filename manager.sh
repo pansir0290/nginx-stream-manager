@@ -24,16 +24,16 @@ setup_environment() {
     # 确保 /etc/nginx/conf.d 存在
     if [ ! -d "/etc/nginx/conf.d" ]; then
         echo "创建配置目录 /etc/nginx/conf.d"
-        mkdir -p /etc/nginx/conf.d
+        sudo mkdir -p /etc/nginx/conf.d
     fi
     
-    # 确保 stream 配置文件存在，但不写入 stream {} 块
+    # 确保 stream 配置文件存在
     if [ ! -f "$CONFIG_FILE" ]; then
         echo "创建空的 Stream 规则文件: $CONFIG_FILE"
         sudo touch "$CONFIG_FILE"
     fi
 
-    # 提醒主配置文件的 include (现在主要由 deploy.sh 负责，但保留提醒)
+    # 提醒主配置文件的 include
     if ! grep -q "include /etc/nginx/conf.d/\*.conf;" "$MAIN_CONF"; then
         echo -e "${YELLOW}警告：Nginx 主配置 ($MAIN_CONF) 可能缺少 'include /etc/nginx/conf.d/*.conf;'$NC"
     fi
@@ -44,33 +44,12 @@ generate_config_block() {
     local TARGET_ADDR=$2
     local USE_SSL=$3
     local SSL_NAME=$4
-    local UDP_LINE=""
 
-    # 运行时测试 Nginx 是否支持 UDP 参数
-    local TEMP_TEST_CONF="/tmp/nsm_udp_test.conf"
+    # --- 最终稳定方案：永久禁用 UDP，以兼容所有 Nginx 版本 ---
+    local UDP_LINE="# Nginx不支持UDP: listen ${LISTEN_PORT} udp;"
+    echo -e "${YELLOW}警告: 规则将仅监听 TCP 端口（UDP已注释）。${NC}"
+    # --- ---
     
-    # 尝试用一个简单的 UDP 配置来测试 Nginx 是否能通过配置测试
-    # 注意：使用 sudo 执行 nginx -t 是必要的，因为 nsm 也是用 sudo 运行的
-    
-    # 确保 /tmp 目录存在且可写
-    if [ ! -d "/tmp" ]; then mkdir -p /tmp; fi
-
-    # 构造一个包含 UDP 监听的临时完整 stream 块
-    echo "stream { server { listen 12345 udp; proxy_pass 127.0.0.1:12345; } }" > "$TEMP_TEST_CONF"
-    
-    # 使用 sudo 权限测试配置
-    if sudo nginx -t -c "$TEMP_TEST_CONF" &> /dev/null; then
-        # 如果配置测试成功，说明支持 UDP
-        UDP_LINE="        listen ${LISTEN_PORT} udp;"
-        # echo -e "${YELLOW}提示: Nginx 当前支持 UDP 监听。${NC}" # 在运行时避免过多输出
-    else
-        # 如果配置测试失败，说明不支持 UDP
-        echo -e "${YELLOW}警告: Nginx 不支持 UDP 监听（配置测试失败）。规则将仅监听 TCP。${NC}"
-        UDP_LINE="# Nginx不支持UDP: listen ${LISTEN_PORT} udp;"
-    fi
-    
-    sudo rm -f "$TEMP_TEST_CONF" # 清理临时文件
-
     # 使用 Tab 缩进，与 Nginx 配置风格保持一致
     cat << EOF
 
@@ -80,4 +59,179 @@ ${UDP_LINE}
         proxy_connect_timeout 20s;
         proxy_timeout 5m;
         
-        #
+        # 规则标识符: ${LISTEN_PORT} -> ${TARGET_ADDR}
+EOF
+
+    if [[ "$USE_SSL" =~ ^[Yy]$ ]]; then
+        cat << EOF
+        ssl_preread on;
+        proxy_ssl_name ${SSL_NAME};
+EOF
+    fi
+
+    cat << EOF
+        proxy_pass ${TARGET_ADDR};
+    }
+EOF
+}
+
+# --- 功能 1: 添加规则 ---
+add_rule() {
+    echo -e "\n${GREEN}--- 添加新的转发规则 ---${NC}"
+    read -r -p "请输入监听端口 (例如: 55203): " LISTEN_PORT
+    
+    if [ -z "$LISTEN_PORT" ]; then echo -e "${RED}错误：监听端口不能为空。${NC}"; return; fi
+    
+    if grep -q "listen ${LISTEN_PORT};" "$CONFIG_FILE"; then
+        echo -e "${RED}错误：端口 ${LISTEN_PORT} 的规则已存在，请勿重复添加。${NC}"
+        return
+    fi
+
+    read -r -p "请输入目标地址 (IP:Port, 例如: 31.56.123.199:55203): " TARGET_ADDR
+    
+    if [[ ! "$TARGET_ADDR" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}:[0-9]{1,5}$ ]]; then
+        echo -e "${RED}错误：目标地址格式无效。必须是 IP:Port (例如: 1.1.1.1:443)。${NC}"
+        return
+    fi
+    
+    read -r -p "是否启用 SSL 预读 (ssl_preread on)? (y/n): " USE_SSL
+
+    local SSL_NAME=""
+    if [[ "$USE_SSL" =~ ^[Yy]$ ]]; then
+        read -r -p "请输入 proxy_ssl_name (例如: yahoo.com 或 your_domain.com): " SSL_NAME
+        if [ -z "$SSL_NAME" ]; then
+            SSL_NAME="default_sni" 
+            echo -e "${YELLOW}使用默认 proxy_ssl_name: ${SSL_NAME}${NC}"
+        fi
+    fi
+
+    CONFIG_BLOCK=$(generate_config_block "$LISTEN_PORT" "$TARGET_ADDR" "$USE_SSL" "$SSL_NAME")
+
+    # 直接将配置块追加到文件末尾
+    echo "$CONFIG_BLOCK" | sudo tee -a "$CONFIG_FILE" > /dev/null
+    
+    echo -e "${GREEN}端口 ${LISTEN_PORT} 的规则已成功添加到 $CONFIG_FILE。${NC}"
+    read -r -p "是否立即应用配置并重载 Nginx? (y/n): " APPLY_NOW
+    if [[ "$APPLY_NOW" =~ ^[Yy]$ ]]; then
+        apply_config
+    fi
+}
+
+# --- 功能 2: 查看规则 ---
+view_rules() {
+    echo -e "\n${GREEN}--- 当前 Stream 转发配置 (${CONFIG_FILE}) ---${NC}"
+    if [ -f "$CONFIG_FILE" ]; then
+        if [ "$(grep -c "server {" "$CONFIG_FILE")" -eq 0 ]; then
+             echo "当前未配置任何转发规则。"
+             return
+        fi
+
+        # 使用 awk 美化输出，跳过第一个空行
+        awk '
+        /server \{/ {
+            count++; 
+            print "\n--- 规则 " count " ---"
+            print $0
+            next
+        }
+        {
+            print $0
+        }' "$CONFIG_FILE"
+        
+    else
+        echo -e "${RED}错误：配置文件未找到。${NC}"
+    fi
+    echo ""
+}
+
+# --- 功能 3: 删除规则 ---
+delete_rule() {
+    view_rules
+    
+    if [ "$(grep -c "server {" "$CONFIG_FILE")" -eq 0 ]; then
+        echo -e "${RED}没有可供删除的转发规则。${NC}"
+        return
+    fi
+    
+    read -r -p "请输入要删除规则的监听端口: " PORT_TO_DELETE
+    
+    if [ -z "$PORT_TO_DELETE" ]; then echo -e "${RED}错误：端口号不能为空。${NC}"; return; fi
+
+    LISTEN_LINE=$(grep -n "listen ${PORT_TO_DELETE};" "$CONFIG_FILE" | cut -d: -f1 | head -n 1)
+
+    if [ -z "$LISTEN_LINE" ]; then
+        echo -e "${RED}错误：未找到监听端口 ${PORT_TO_DELETE} 的规则。${NC}"
+        return
+    fi
+
+    SERVER_START=$(sed -n "1,${LISTEN_LINE}p" "$CONFIG_FILE" | grep -n "server {" | tail -n 1 | cut -d: -f1)
+    SERVER_END_OFFSET=$(sed -n "${SERVER_START},\$p" "$CONFIG_FILE" | grep -n "}" | head -n 1 | cut -d: -f1)
+    SERVER_END=$((SERVER_START + SERVER_END_OFFSET - 1))
+    
+    if [ -n "$SERVER_START" ] && [ "$SERVER_END" ] && [ "$SERVER_START" -lt "$SERVER_END" ]; then
+        echo -e "${GREEN}正在删除端口 ${PORT_TO_DELETE} 的规则块 (行 $SERVER_START 到 $SERVER_END)...${NC}"
+        
+        sudo sed -i "${SERVER_START},${SERVER_END}d" "$CONFIG_FILE"
+        
+        echo -e "${GREEN}规则已删除。${NC}"
+        read -r -p "是否立即应用配置并重载 Nginx? (y/n): " APPLY_NOW
+        if [[ "$APPLY_NOW" =~ ^[Yy]$ ]]; then
+            apply_config
+        fi
+    else
+        echo -e "${RED}错误：无法定位完整的 server 块。请手动检查文件。${NC}"
+    fi
+}
+
+# --- 功能 4: 应用配置并重载 Nginx ---
+apply_config() {
+    echo -e "\n${GREEN}--- 测试 Nginx 配置 ---${NC}"
+    
+    if nginx -t 2>&1 | grep -q "syntax is ok"; then
+        echo -e "${GREEN}配置测试成功! 正在重载 Nginx...${NC}"
+        if sudo systemctl reload "$NGINX_SERVICE"; then
+            echo -e "${GREEN}Nginx 重载成功，新规则已生效。${NC}"
+        else
+            echo -e "${RED}错误：Nginx 重载失败。请检查系统日志 (例如: journalctl -xe)。${NC}"
+        fi
+    else
+        echo -e "${RED}配置测试失败。新配置未应用。${NC}"
+        sudo nginx -t
+    fi
+}
+
+# --- 主菜单 ---
+main_menu() {
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${RED}错误：此脚本必须使用 root 权限 (sudo) 运行。${NC}"
+        exit 1
+    fi
+    
+    setup_environment
+
+    while true; do
+        echo -e "\n${GREEN}=============================================${NC}"
+        echo -e "${GREEN} Nginx Stream 转发管理器 (v1.0) ${NC}"
+        echo -e "${GREEN}=============================================${NC}"
+        echo "1. 添加新的转发规则"
+        echo "2. 查看当前转发规则"
+        echo "3. 删除转发规则 (按监听端口)"
+        echo "4. 应用配置并重载 Nginx (使更改生效)"
+        echo "5. 退出"
+        echo -e "${GREEN}=============================================${NC}"
+        
+        read -r -p "请选择操作 [1-5]: " CHOICE
+
+        case "$CHOICE" in
+            1) add_rule ;;
+            2) view_rules ;;
+            3) delete_rule ;;
+            4) apply_config ;;
+            5) echo "感谢使用管理器。再见！"; exit 0 ;;
+            *) echo -e "${RED}无效输入，请选择 1 到 5 之间的数字。${NC}" ;;
+        esac
+    done
+}
+
+# --- 脚本开始 ---
+main_menu

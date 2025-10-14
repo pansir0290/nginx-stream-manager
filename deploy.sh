@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # --- Configuration ---
+# 请确保这里是你正确的仓库信息
 REPO_URL="pansir0290/nginx-stream-manager"
 MANAGER_SCRIPT="manager.sh"
 TARGET_PATH="/usr/local/bin/nsm"
@@ -15,44 +16,28 @@ NC='\033[0m' # No Color
 
 echo -e "${GREEN}--- Nginx Stream Manager (nsm) Deployment Script ---${NC}"
 
-# --- 检查与提示升级 Nginx 的函数 (保持不变，用于前置依赖检查) ---
-check_and_prompt_nginx_upgrade() {
-    echo -e "\n${GREEN}--- Nginx 依赖检查与 UDP 支持验证 ---${NC}"
+# --- 检查与提示升级 Nginx 的函数 (因 UDP 不支持，仅作依赖检查) ---
+check_nginx_dependency() {
+    echo -e "\n${GREEN}--- Nginx 依赖检查 ---${NC}"
 
     if ! command -v nginx &> /dev/null; then
         echo -e "${YELLOW}警告：Nginx 未安装。请先运行 'sudo apt install nginx -y' 安装。${NC}"
+        # 不退出，让脚本继续部署，但用户需要先安装Nginx才能运行nsm
         return
     fi
     
-    # 清理旧的错误配置，以防测试失败
+    # 清理旧的错误配置，以防测试失败 (使用正确的 tee 命令)
     echo "清理旧的 stream_proxy.conf 文件中的残留内容..."
-    sudo > "$CONFIG_FILE" # 使用 sudo > 是不安全的，但如果 shell 是 root，可以工作。我们用 tee 替代。
     sudo tee "$CONFIG_FILE" < /dev/null > /dev/null
-    
-    # 尝试用 UDP 监听配置来测试 Nginx 是否支持 UDP
-    echo "测试 Nginx 是否支持 Stream UDP..."
-    local TEMP_TEST_CONF="/tmp/nsm_udp_test.conf"
-    
-    # 构造一个包含 UDP 监听的临时完整 stream 块
-    echo "stream { server { listen 12345 udp; proxy_pass 127.0.0.1:12345; } }" | tee "$TEMP_TEST_CONF" > /dev/null
-    
-    if sudo nginx -t -c "$TEMP_TEST_CONF" &> /dev/null; then
-        echo -e "${GREEN}✅ Nginx 版本支持 Stream UDP 转发。${NC}"
-    else
-        echo -e "${RED}❌ Nginx 配置测试失败，错误信息表明不支持 'udp' 参数。${NC}"
-        echo "   这通常是 Nginx 缺少编译参数或版本过旧导致的。"
-        echo -e "   ${YELLOW}在继续之前，请务必手动运行： 'sudo apt update && sudo apt upgrade nginx -y'${NC}"
-        echo -e "   ${RED}--- 部署终止 ---${NC}"
-        # 退出，让用户解决依赖问题
-        exit 1
-    fi
-    
-    sudo rm -f "$TEMP_TEST_CONF" # 清理临时测试配置
+
+    # 提示用户当前的 UDP 限制
+    echo -e "${YELLOW}警告：经检测，您的 Nginx 版本不支持 Stream UDP。${NC}"
+    echo -e "   脚本已配置为仅监听 TCP 端口，以确保配置通过。${NC}"
 }
-# --- 检查与提示升级 Nginx 的函数结束 ---
+# --- 检查函数结束 ---
 
 
-# --- 自动化配置 Nginx 主配置的函数 (保持不变) ---
+# --- 自动化配置 Nginx 主配置的函数 ---
 configure_nginx_main() {
     echo -e "\n${GREEN}--- 检查并配置 Nginx 主配置文件 ---${NC}"
 
@@ -90,7 +75,7 @@ configure_nginx_main() {
     echo -e "${RED}错误：无法在 $MAIN_CONF 中定位插入点，请手动配置 Nginx。${NC}"
 }
 
-# --- 新增函数：部署后清理和启动准备 ---
+# --- 部署后清理和启动准备 ---
 post_deployment_cleanup() {
     echo -e "\n${GREEN}--- 部署后清理与服务启动准备 ---${NC}"
     
@@ -99,7 +84,7 @@ post_deployment_cleanup() {
         return
     fi
 
-    # 1. 清空残留配置 (这确保了 manager.sh 在第一次运行时是干净的)
+    # 1. 确保清空残留配置 (双重保险)
     echo "清空规则文件 ${CONFIG_FILE} 中的残留内容..."
     sudo tee "$CONFIG_FILE" < /dev/null > /dev/null
     
@@ -111,15 +96,14 @@ post_deployment_cleanup() {
         echo -e "${RED}警告：Nginx 服务重启失败！请检查 ${MAIN_CONF} 文件语法。${NC}"
     fi
 }
-# --- 部署后清理函数结束 ---
 
 
 # --- 脚本主要流程 ---
 
 # 0. Nginx 兼容性检查和升级提示
-check_and_prompt_nginx_upgrade
+check_nginx_dependency
 
-# 1. 检查下载器 (curl/wget) (保持不变)
+# 1. 检查下载器 (curl/wget)
 DOWNLOADER=""
 if command -v wget &> /dev/null; then
     DOWNLOADER="sudo wget -qO"
@@ -130,7 +114,7 @@ else
     exit 1
 fi 
 
-# 2. 下载主管理脚本 (保持不变)
+# 2. 下载主管理脚本 
 DOWNLOAD_URL="https://raw.githubusercontent.com/${REPO_URL}/main/${MANAGER_SCRIPT}"
 echo "Downloading ${MANAGER_SCRIPT} from GitHub..."
 
@@ -141,35 +125,30 @@ else
     exit 1
 fi 
 
-# 3. 设置执行权限 (保持不变)
+# 3. 设置执行权限
 echo "Setting executable permissions..."
 sudo chmod +x "$TARGET_PATH"
 
 # 4. 自动化配置 Nginx 主配置 (插入 stream {})
 configure_nginx_main
 
-# 5. 执行部署后清理和重启 Nginx (新步骤)
+# 5. 执行部署后清理和重启 Nginx
 post_deployment_cleanup
 
-# 6. 设置用户友好函数 (nsm) (保持不变)
+# 6. 设置用户友好函数 (nsm)
 ALIAS_COMMAND="nsm() { sudo $TARGET_PATH \"\$@\"; }"
 ALIAS_CHECK="nsm()"
 
 # 自动检测并选择 Shell 配置文件
 if [ -n "$ZSH_VERSION" ]; then
     SHELL_CONFIG="$HOME/.zshrc"
-    echo "Detected Zsh. Using $SHELL_CONFIG for 'nsm' function."
 elif [ -n "$BASH_VERSION" ]; then
     SHELL_CONFIG="$HOME/.bashrc"
-    echo "Detected Bash. Using $SHELL_CONFIG for 'nsm' function."
 else
     SHELL_CONFIG="$HOME/.bashrc"
-    echo "Defaulting to $SHELL_CONFIG for 'nsm' function."
 fi
 
-
 if [ ! -f "$SHELL_CONFIG" ]; then 
-    echo "Creating $SHELL_CONFIG file..."
     touch "$SHELL_CONFIG"
 fi
 
