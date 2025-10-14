@@ -37,6 +37,7 @@ setup_environment() {
         echo -e "${YELLOW}警告：Nginx 主配置 ($MAIN_CONF) 可能缺少 'include /etc/nginx/conf.d/*.conf;'$NC"
     fi
 }
+
 # --- 核心函数：生成配置块 (已移除超时指令和 UDP 监听) ---
 generate_config_block() {
     local LISTEN_PORT=$1
@@ -64,17 +65,26 @@ generate_config_block() {
     echo -e "$CONFIG_BLOCK"
 }
 
-# --- 功能 1: 安装依赖 ---
+# --- 功能 1: 安装依赖 (增强版，包含 selinux-utils) ---
 install_dependencies() {
     echo -e "\n${GREEN}--- 安装 SELinux/系统依赖 ---${NC}"
     
     if command -v apt &> /dev/null; then
         echo -e "${YELLOW}检测到 Debian/Ubuntu 系统。${NC}"
-        read -r -p "是否运行 'sudo apt update' 并安装 SELinux 管理工具 (policycoreutils)? (y/n): " INSTALL_CONFIRM
+        # 针对 Debian/Ubuntu 系统，安装 policycoreutils 和 selinux-utils，确保 setsebool/semanage 存在。
+        read -r -p "是否运行 'sudo apt update' 并安装完整的 SELinux 管理工具 (policycoreutils selinux-utils)? (y/n): " INSTALL_CONFIRM
         if [[ "$INSTALL_CONFIRM" =~ ^[Yy]$ ]]; then
             sudo apt update
-            sudo apt install -y policycoreutils
-            echo -e "${GREEN}SELinux 管理工具安装完成。${NC}"
+            # 同时安装这两个包，以确保获得 setsebool 和 semanage
+            sudo apt install -y policycoreutils selinux-utils
+            echo -e "${GREEN}SELinux 管理工具 (policycoreutils, selinux-utils) 安装尝试完成。${NC}"
+            
+            # 额外检查是否成功安装
+            if command -v setsebool &> /dev/null && command -v semanage &> /dev/null; then
+                echo -e "${GREEN}✅ setsebool 和 semanage 现已可用。${NC}"
+            else
+                echo -e "${YELLOW}⚠️ 某些 SELinux 工具可能仍然缺失或不在 PATH 中。${NC}"
+            fi
         fi
     elif command -v yum &> /dev/null || command -v dnf &> /dev/null; then
         echo -e "${YELLOW}检测到 RHEL/CentOS/Fedora 系统。${NC}"
@@ -84,7 +94,7 @@ install_dependencies() {
             echo -e "${GREEN}SELinux 管理工具安装完成。${NC}"
         fi
     else
-        echo -e "${RED}错误：无法识别您的包管理器。请手动安装 policycoreutils 或 policycoreutils-python-utils 包。${NC}"
+        echo -e "${RED}错误：无法识别您的包管理器。请手动安装 SELinux 管理工具包。${NC}"
     fi
 }
 
@@ -93,6 +103,7 @@ install_dependencies() {
 configure_selinux() {
     echo -e "\n${GREEN}--- 配置 SELinux 策略 ---${NC}"
     
+    # 检查 SELinux 核心工具是否存在
     if ! command -v getenforce &> /dev/null; then
         echo -e "${YELLOW}警告：系统似乎没有安装 SELinux 工具。请先运行选项 1 安装依赖。${NC}"
         return
@@ -115,6 +126,7 @@ configure_selinux() {
             echo -e "${GREEN}配置已修改为 'SELINUX=disabled'。请在方便时重启系统。${NC}"
             ;;
         2) 
+            # 检查 setsebool 和 semanage 是否存在
             if ! command -v setsebool &> /dev/null || ! command -v semanage &> /dev/null; then
                 echo -e "${RED}错误：缺少 'setsebool' 或 'semanage' 工具。请先运行选项 1 安装依赖。${NC}"
                 return
