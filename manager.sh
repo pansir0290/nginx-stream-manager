@@ -38,7 +38,7 @@ setup_environment() {
     fi
 }
 
-# --- 核心函数：生成配置块 (使用 Upstream 块修复语法) ---
+# --- 核心函数：生成配置块 (使用 Upstream 块修复语法并优化换行) ---
 generate_config_block() {
     local LISTEN_PORT=$1
     local TARGET_ADDR=$2
@@ -54,19 +54,19 @@ generate_config_block() {
     
     local UDP_LINE="# Nginx不支持UDP: listen ${LISTEN_PORT} udp;"
     
-    # 1. 构建 Upstream 块
-    CONFIG_BLOCK="
+    # 1. 使用 here-doc (<<-) 来构建配置块，并消除开头的多余换行
+    CONFIG_BLOCK=$(cat <<- EOM
     upstream ${UPSTREAM_NAME} {
         # 规则标识符: ${LISTEN_PORT} -> ${TARGET_ADDR}
         server ${TARGET_ADDR};
-    }"
-
-    # 2. 构建 Server 块
-    CONFIG_BLOCK+="\n
+    }
+    
     server {
         listen ${LISTEN_PORT};
 ${UDP_LINE}
-        # 超时指令已在 /etc/nginx/nginx.conf 的 stream {} 块中全局设置"
+        # 超时指令已在 /etc/nginx/nginx.conf 的 stream {} 块中全局设置
+EOM
+)
 
     if [[ "$USE_SSL" =~ ^[Yy]$ ]]; then
         CONFIG_BLOCK+="\n        ssl_preread on;"
