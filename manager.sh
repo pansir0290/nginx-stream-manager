@@ -39,20 +39,21 @@ setup_environment() {
     fi
 }
 
+# --- 核心修改：简化生成配置块，确保格式干净 ---
 generate_config_block() {
     local LISTEN_PORT=$1
     local TARGET_ADDR=$2
     local USE_SSL=$3
     local SSL_NAME=$4
+    local CONFIG_BLOCK=""
 
-    # --- 最终稳定方案：永久禁用 UDP，以兼容所有 Nginx 版本 ---
+    # --- 最终稳定方案：永久禁用 UDP ---
     local UDP_LINE="# Nginx不支持UDP: listen ${LISTEN_PORT} udp;"
     echo -e "${YELLOW}警告: 规则将仅监听 TCP 端口（UDP已注释）。${NC}"
     # --- ---
     
-    # 使用 Tab 缩进，与 Nginx 配置风格保持一致
-    cat << EOF
-
+    # 使用 'printf' 配合换行符，而不是依赖 cat << EOF 块内部的空白行
+    CONFIG_BLOCK=$(printf "
     server {
         listen ${LISTEN_PORT};
 ${UDP_LINE}
@@ -60,19 +61,22 @@ ${UDP_LINE}
         proxy_timeout 5m;
         
         # 规则标识符: ${LISTEN_PORT} -> ${TARGET_ADDR}
-EOF
+")
 
     if [[ "$USE_SSL" =~ ^[Yy]$ ]]; then
-        cat << EOF
+        CONFIG_BLOCK+=$(printf "
         ssl_preread on;
         proxy_ssl_name ${SSL_NAME};
-EOF
+")
     fi
 
-    cat << EOF
+    CONFIG_BLOCK+=$(printf "
         proxy_pass ${TARGET_ADDR};
     }
-EOF
+")
+
+    # 返回生成的配置块
+    echo "$CONFIG_BLOCK"
 }
 
 # --- 功能 1: 添加规则 ---
@@ -107,8 +111,8 @@ add_rule() {
 
     CONFIG_BLOCK=$(generate_config_block "$LISTEN_PORT" "$TARGET_ADDR" "$USE_SSL" "$SSL_NAME")
 
-    # 直接将配置块追加到文件末尾
-    echo "$CONFIG_BLOCK" | sudo tee -a "$CONFIG_FILE" > /dev/null
+    # 直接将配置块追加到文件末尾 (使用 echo -e 来处理换行符)
+    echo -e "$CONFIG_BLOCK" | sudo tee -a "$CONFIG_FILE" > /dev/null
     
     echo -e "${GREEN}端口 ${LISTEN_PORT} 的规则已成功添加到 $CONFIG_FILE。${NC}"
     read -r -p "是否立即应用配置并重载 Nginx? (y/n): " APPLY_NOW
@@ -117,7 +121,7 @@ add_rule() {
     fi
 }
 
-# --- 功能 2: 查看规则 ---
+# --- 功能 2, 3, 4 (查看, 删除, 应用) 保持不变 ---
 view_rules() {
     echo -e "\n${GREEN}--- 当前 Stream 转发配置 (${CONFIG_FILE}) ---${NC}"
     if [ -f "$CONFIG_FILE" ]; then
@@ -126,7 +130,6 @@ view_rules() {
              return
         fi
 
-        # 使用 awk 美化输出，跳过第一个空行
         awk '
         /server \{/ {
             count++; 
@@ -144,7 +147,6 @@ view_rules() {
     echo ""
 }
 
-# --- 功能 3: 删除规则 ---
 delete_rule() {
     view_rules
     
@@ -183,7 +185,6 @@ delete_rule() {
     fi
 }
 
-# --- 功能 4: 应用配置并重载 Nginx ---
 apply_config() {
     echo -e "\n${GREEN}--- 测试 Nginx 配置 ---${NC}"
     
