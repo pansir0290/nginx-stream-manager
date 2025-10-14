@@ -79,7 +79,7 @@ install_dependencies() {
             sudo apt install -y policycoreutils selinux-utils
             echo -e "${GREEN}SELinux 管理工具 (policycoreutils, selinux-utils) 安装尝试完成。${NC}"
             
-            # 额外检查是否成功安装
+            # 额外检查是否成功安装（使用绝对路径）
             if [ -x "/usr/sbin/setsebool" ] && [ -x "/usr/sbin/semanage" ]; then
                 echo -e "${GREEN}✅ setsebool 和 semanage 现已可用。${NC}"
             else
