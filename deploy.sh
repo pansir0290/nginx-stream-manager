@@ -77,17 +77,17 @@ else
     echo "'nsm' function already exists in $SHELL_CONFIG. Skipping addition."
 fi 
 
-# 6. 立即运行管理器 (直接使用 sudo 运行下载的脚本)
-echo -e "\n${GREEN}--- Deployment Complete! Launching Manager Now (requires sudo password) ---${NC}"
-# 直接以 sudo 权限运行管理脚本 
-sudo "$TARGET_PATH"
+# 6. 立即执行管理器 (跳过 source 步骤) 
+# echo -e "\n${GREEN}--- Deployment Complete! Launching Manager Now ---${NC}" 
+# # 直接以 sudo 权限运行管理脚本 
+# sudo "$TARGET_PATH" # <--- 注释掉这一行，或者直接删除
 
 # 提示用户下次如何启动 
-echo -e "\n${GREEN}--- Manager Exited ---${NC}"
+echo -e "\n${GREEN}--- Deployment Complete! ---${NC}"
 echo "✅ The setup is complete."
 echo -e "💡 To use the command 'nsm' in future sessions, you need to execute:"
 echo -e "   ${YELLOW}source $SHELL_CONFIG${NC}"
 echo "   (or simply open a new terminal session)"
 echo -e "🚀 Then, run the manager with: ${GREEN}nsm${NC}"
 
-exit 0
+exit 0 
