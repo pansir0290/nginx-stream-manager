@@ -80,7 +80,7 @@ install_dependencies() {
             echo -e "${GREEN}SELinux 管理工具 (policycoreutils, selinux-utils) 安装尝试完成。${NC}"
             
             # 额外检查是否成功安装
-            if command -v setsebool &> /dev/null && command -v semanage &> /dev/null; then
+            if [ -x "/usr/sbin/setsebool" ] && [ -x "/usr/sbin/semanage" ]; then
                 echo -e "${GREEN}✅ setsebool 和 semanage 现已可用。${NC}"
             else
                 echo -e "${YELLOW}⚠️ 某些 SELinux 工具可能仍然缺失或不在 PATH 中。${NC}"
@@ -126,16 +126,23 @@ configure_selinux() {
             echo -e "${GREEN}配置已修改为 'SELINUX=disabled'。请在方便时重启系统。${NC}"
             ;;
         2) 
-            # 检查 setsebool 和 semanage 是否存在
-            if ! command -v setsebool &> /dev/null || ! command -v semanage &> /dev/null; then
-                echo -e "${RED}错误：缺少 'setsebool' 或 'semanage' 工具。请先运行选项 1 安装依赖。${NC}"
+            # --- 修复后的检查和命令：使用绝对路径 /usr/sbin/ ---
+            if [ ! -x "/usr/sbin/setsebool" ] || [ ! -x "/usr/sbin/semanage" ]; then
+                echo -e "${RED}错误：缺少 '/usr/sbin/setsebool' 或 '/usr/sbin/semanage' 工具。${NC}"
+                echo -e "${YELLOW}请确保您已运行选项 1。如果问题仍然存在，请手动检查 /usr/sbin 目录。${NC}"
                 return
             fi
             
-            echo "1. 允许 Nginx 发起网络连接 (setsebool -P httpd_can_network_connect on)"
-            sudo setsebool -P httpd_can_network_connect on
+            echo "1. 允许 Nginx 发起网络连接 (/usr/sbin/setsebool -P httpd_can_network_connect on)"
+            sudo /usr/sbin/setsebool -P httpd_can_network_connect on
             
-            echo -e "${YELLOW}注意：端口策略可能需要手动添加，例如: sudo semanage port -a -t http_port_t -p tcp <端口号>${NC}"
+            echo -e "${YELLOW}注意：端口策略可能需要手动添加，例如: sudo /usr/sbin/semanage port -a -t http_port_t -p tcp <端口号>${NC}"
+            
+            # 使用绝对路径执行 semanage
+            if ! sudo /usr/sbin/semanage port -l &> /dev/null; then
+                 echo -e "${YELLOW}警告：semanage 运行时可能需要额外配置或权限。${NC}"
+            fi
+
             echo -e "${GREEN}Nginx 的网络代理权限已放宽。${NC}"
             
             if [ "$CURRENT_STATUS" != "enforcing" ]; then
