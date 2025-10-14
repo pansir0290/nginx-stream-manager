@@ -173,6 +173,7 @@ view_rules() {
              return
         fi
 
+        # 注意：这里的 awk 代码没有修改，因为它不是导致 EOF 错误的原因
         awk '
         /server \{/ {
             count++; 
