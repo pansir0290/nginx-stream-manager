@@ -38,28 +38,43 @@ setup_environment() {
     fi
 }
 
-# --- 核心函数：生成配置块 (已移除超时指令和 UDP 监听) ---
+# --- 核心函数：生成配置块 (使用 Upstream 块修复语法) ---
 generate_config_block() {
     local LISTEN_PORT=$1
     local TARGET_ADDR=$2
     local USE_SSL=$3
     local SSL_NAME=$4
+    local UPSTREAM_NAME=$5 # 新增参数
     local CONFIG_BLOCK=""
+    
+    local TARGET_IP=$(echo "$TARGET_ADDR" | cut -d: -f1)
+    local TARGET_PORT=$(echo "$TARGET_ADDR" | cut -d: -f2)
 
-    # 警告信息必须输出到标准错误流 (>&2)，以确保它不会被捕获到 CONFIG_BLOCK 变量中
     echo -e "${YELLOW}警告: 规则将仅监听 TCP 端口（UDP已注释）。${NC}" >&2
     
     local UDP_LINE="# Nginx不支持UDP: listen ${LISTEN_PORT} udp;"
     
-    # 构建配置块，注意：移除了 proxy_connect_timeout 和 proxy_timeout
-    CONFIG_BLOCK="\n    server {\n        listen ${LISTEN_PORT};\n${UDP_LINE}\n        # 超时指令已在 /etc/nginx/nginx.conf 的 stream {} 块中全局设置\n        # 规则标识符: ${LISTEN_PORT} -> ${TARGET_ADDR}"
+    # 1. 构建 Upstream 块
+    CONFIG_BLOCK="
+    upstream ${UPSTREAM_NAME} {
+        # 规则标识符: ${LISTEN_PORT} -> ${TARGET_ADDR}
+        server ${TARGET_ADDR};
+    }"
+
+    # 2. 构建 Server 块
+    CONFIG_BLOCK+="\n
+    server {
+        listen ${LISTEN_PORT};
+${UDP_LINE}
+        # 超时指令已在 /etc/nginx/nginx.conf 的 stream {} 块中全局设置"
 
     if [[ "$USE_SSL" =~ ^[Yy]$ ]]; then
         CONFIG_BLOCK+="\n        ssl_preread on;"
         CONFIG_BLOCK+="\n        proxy_ssl_name ${SSL_NAME};"
     fi
 
-    CONFIG_BLOCK+="\n        proxy_pass ${TARGET_ADDR};\n    }"
+    # 3. proxy_pass 指向 Upstream 名称
+    CONFIG_BLOCK+="\n        proxy_pass ${UPSTREAM_NAME};\n    }"
     
     # 返回生成的配置块
     echo -e "$CONFIG_BLOCK"
@@ -194,8 +209,11 @@ add_rule() {
         fi
     fi
 
+    # 新增：生成唯一的 upstream 名称
+    local UPSTREAM_NAME="proxy_${LISTEN_PORT}"
+    
     # 捕获 generate_config_block 的输出 (配置块)
-    CONFIG_BLOCK=$(generate_config_block "$LISTEN_PORT" "$TARGET_ADDR" "$USE_SSL" "$SSL_NAME")
+    CONFIG_BLOCK=$(generate_config_block "$LISTEN_PORT" "$TARGET_ADDR" "$USE_SSL" "$SSL_NAME" "$UPSTREAM_NAME")
 
     # 将配置块追加到文件末尾
     echo -e "$CONFIG_BLOCK" | sudo tee -a "$CONFIG_FILE" > /dev/null
@@ -211,15 +229,20 @@ add_rule() {
 view_rules() {
     echo -e "\n${GREEN}--- 当前 Stream 转发配置 (${CONFIG_FILE}) ---${NC}"
     if [ -f "$CONFIG_FILE" ]; then
-        if [ "$(grep -c "server {" "$CONFIG_FILE")" -eq 0 ]; then
+        if [ "$(grep -c "server {" "$CONFIG_FILE")" -eq 0 ] && [ "$(grep -c "upstream " "$CONFIG_FILE")" -eq 0 ]; then
              echo "当前未配置任何转发规则。"
              return
         fi
 
+        # 稍微调整 awk 逻辑以更好地显示 upstream 块和 server 块
         awk '
+        /upstream / {
+            print "\n--- UPSTREAM 块 ---"
+            print $0
+            next
+        }
         /server \{/ {
-            count++; 
-            print "\n--- 规则 " count " ---"
+            print "\n--- SERVER 块 ---"
             print $0
             next
         }
@@ -237,7 +260,7 @@ view_rules() {
 delete_rule() {
     view_rules
     
-    if [ "$(grep -c "server {" "$CONFIG_FILE")" -eq 0 ]; then
+    if [ "$(grep -c "server {" "$CONFIG_FILE")" -eq 0 ] && [ "$(grep -c "upstream " "$CONFIG_FILE")" -eq 0 ]; then
         echo -e "${RED}没有可供删除的转发规则。${NC}"
         return
     fi
@@ -252,17 +275,39 @@ delete_rule() {
         echo -e "${RED}错误：未找到监听端口 ${PORT_TO_DELETE} 的规则。${NC}"
         return
     fi
-
-    # 使用 sed 定位 server {} 块的开始和结束
+    
+    # 获取 upstream 名称，用于查找 upstream 块。我们知道 upstream 名称是 proxy_<端口号>
+    UPSTREAM_NAME="proxy_${PORT_TO_DELETE}"
+    
+    # 1. 查找 Server 块的起始和结束行
     SERVER_START=$(sed -n "1,${LISTEN_LINE}p" "$CONFIG_FILE" | grep -n "server {" | tail -n 1 | cut -d: -f1)
     SERVER_END_OFFSET=$(sed -n "${SERVER_START},\$p" "$CONFIG_FILE" | grep -n "}" | head -n 1 | cut -d: -f1)
     SERVER_END=$((SERVER_START + SERVER_END_OFFSET - 1))
     
+    # 2. 查找 Upstream 块的起始和结束行
+    UPSTREAM_START=$(grep -n "upstream ${UPSTREAM_NAME}" "$CONFIG_FILE" | cut -d: -f1 | head -n 1)
+    if [ -n "$UPSTREAM_START" ]; then
+        UPSTREAM_END_OFFSET=$(sed -n "${UPSTREAM_START},\$p" "$CONFIG_FILE" | grep -n "}" | head -n 1 | cut -d: -f1)
+        UPSTREAM_END=$((UPSTREAM_START + UPSTREAM_END_OFFSET - 1))
+    else
+        # 如果找不到 upstream，我们只删除 server 块
+        UPSTREAM_START=0
+        UPSTREAM_END=0
+    fi
+    
     if [ -n "$SERVER_START" ] && [ "$SERVER_END" ] && [ "$SERVER_START" -lt "$SERVER_END" ]; then
-        echo -e "${GREEN}正在删除端口 ${PORT_TO_DELETE} 的规则块 (行 $SERVER_START 到 $SERVER_END)...${NC}"
+        echo -e "${GREEN}正在删除端口 ${PORT_TO_DELETE} 的 SERVER 规则块 (行 $SERVER_START 到 $SERVER_END)...${NC}"
         
-        # 删除行之前，先删除块前后的空行，避免残留大量空行
+        # 删除 Server 块
         sudo sed -i "${SERVER_START},${SERVER_END}d" "$CONFIG_FILE"
+        
+        # 删除 Upstream 块（如果找到）
+        if [ "$UPSTREAM_START" -gt 0 ] && [ "$UPSTREAM_END" -gt 0 ]; then
+             echo -e "${GREEN}正在删除 UPSTREAM 规则块 (行 $UPSTREAM_START 到 $UPSTREAM_END)...${NC}"
+             # 由于删除了前面的行，这里的行号可能不准确了。最简单粗暴的方法是使用模式匹配删除。
+             sudo sed -i "/upstream ${UPSTREAM_NAME} {/,/}/d" "$CONFIG_FILE"
+        fi
+        
         sudo sed -i '/^$/d' "$CONFIG_FILE" # 清理多余空行
 
         echo -e "${GREEN}规则已删除。${NC}"
@@ -274,6 +319,7 @@ delete_rule() {
         echo -e "${RED}错误：无法定位完整的 server 块。请手动检查文件。${NC}"
     fi
 }
+
 
 # --- 功能 6: 应用配置并重载 Nginx ---
 apply_config() {
