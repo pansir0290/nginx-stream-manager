@@ -6,146 +6,265 @@ MAIN_CONF="/etc/nginx/nginx.conf"
 NGINX_SERVICE="nginx"
 MANAGER_URL="https://raw.githubusercontent.com/pansir0290/nginx-stream-manager/main/manager.sh"
 MANAGER_PATH="/usr/local/bin/nsm"
+BACKUP_DIR="/etc/nginx/conf-backup"
 
 # 颜色定义
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 RED='\033[0;31m'
-NC='\033[0m'
+NC='\033[0m' # No Color
 
-# --- 核心函数：配置 Nginx 主配置文件 ---
+# --- 核心函数 ---
+
+# 查找SSL模块路径
+find_ssl_module() {
+    local paths=(
+        "/usr/lib/nginx/modules"
+        "/usr/lib64/nginx/modules"
+        "/usr/lib/x86_64-linux-gnu/nginx/modules"
+        "/usr/share/nginx/modules"
+    )
+    
+    for path in "${paths[@]}"; do
+        if [ -f "$path/ngx_stream_ssl_module.so" ]; then
+            echo "$path/ngx_stream_ssl_module.so"
+            return 0
+        fi
+    done
+    
+    echo ""
+    return 1
+}
+
+# 创建配置备份
+create_backup() {
+    echo -e "${YELLOW}创建配置备份...${NC}"
+    sudo mkdir -p "$BACKUP_DIR"
+    local timestamp=$(date +%Y%m%d-%H%M%S)
+    
+    sudo cp -f "$MAIN_CONF" "$BACKUP_DIR/nginx.conf.bak-$timestamp"
+    [ -f "$CONFIG_FILE" ] && sudo cp -f "$CONFIG_FILE" "$BACKUP_DIR/stream_proxy.conf.bak-$timestamp"
+    
+    echo -e "${GREEN}配置已备份到: ${YELLOW}$BACKUP_DIR${NC}"
+}
+
+# 验证Nginx配置
+validate_nginx_config() {
+    echo -e "${YELLOW}验证Nginx配置...${NC}"
+    if ! sudo nginx -t > /dev/null 2>&1; then
+        echo -e "${RED}错误: Nginx配置验证失败${NC}"
+        echo "尝试恢复原始配置..."
+        sudo cp -f "$BACKUP_DIR/nginx.conf.bak-$timestamp" "$MAIN_CONF"
+        sudo nginx -t || {
+            echo -e "${RED}严重错误: 无法恢复有效配置，请手动修复${NC}"
+            exit 1
+        }
+        return 1
+    fi
+    return 0
+}
+
+# 重启Nginx服务
+restart_nginx_service() {
+    echo -e "${YELLOW}尝试重启Nginx...${NC}"
+    
+    if systemctl list-unit-files | grep -q "^${NGINX_SERVICE}.service"; then
+        sudo systemctl restart "$NGINX_SERVICE" && return 0
+    fi
+    
+    if command -v service > /dev/null; then
+        sudo service "$NGINX_SERVICE" restart && return 0
+    fi
+    
+    if [ -f "/etc/init.d/$NGINX_SERVICE" ]; then
+        sudo "/etc/init.d/$NGINX_SERVICE" restart && return 0
+    fi
+    
+    echo -e "${YELLOW}警告: 无法自动重启服务，请手动执行: ${RED}nginx -s reload${NC}"
+    return 1
+}
+
+# 检查依赖项
+check_dependencies() {
+    local missing=()
+    
+    for cmd in curl nginx sed grep; do
+        if ! command -v $cmd > /dev/null; then
+            missing+=("$cmd")
+        fi
+    done
+    
+    if [ ${#missing[@]} -ne 0 ]; then
+        echo -e "${RED}错误: 缺少依赖项: ${missing[*]}${NC}"
+        echo "请安装后再运行此脚本"
+        exit 1
+    fi
+}
+
+# 配置Nginx主文件
 configure_nginx_main_conf() {
-    echo -e "\n--- 检查并配置 Nginx 主配置文件 ---"
+    echo -e "\n--- 配置Nginx主文件 ---"
+    local needs_restart=0
+    local ssl_module=$(find_ssl_module)
     
-    # 1. 检查 stream 块是否存在
-    if ! grep -q "stream {" "$MAIN_CONF"; then
-        echo -e "${YELLOW}警告: Nginx 主配置 ($MAIN_CONF) 中缺少 'stream {}' 块，尝试添加。${NC}"
-        # 在 http 块之前添加 stream 块
-        # 使用 sed 在 'http {' 之前插入 stream 块和 include
-        sudo sed -i '/http {/i\
-stream {\
-    include /etc/nginx/conf.d/stream_proxy.conf;\
-}\
-' "$MAIN_CONF"
-        echo -e "${GREEN}'stream {}' 块已添加到 $MAIN_CONF。${NC}"
-    fi
-
-    # 2. 确保 stream_proxy.conf 文件被 include 进 stream 块
-    if ! grep -q "include /etc/nginx/conf.d/stream_proxy.conf;" "$MAIN_CONF"; then
-        echo -e "${YELLOW}警告: 确保 stream_proxy.conf 被正确 include...${NC}"
-        
-        # 尝试在 stream { 块的内部添加 include
-        if grep -q "stream {" "$MAIN_CONF"; then
-            # 在 stream { 的下一行添加 include
-            sudo sed -i '/stream {/a\    include /etc/nginx/conf.d/stream_proxy.conf;' "$MAIN_CONF"
-            echo -e "${GREEN}已将 'include /etc/nginx/conf.d/stream_proxy.conf;' 添加到 stream 块中。${NC}"
-        fi
-    fi
-
-    # 3. 添加全局超时配置 (如果不存在)
-    # 使用较宽松的检查，避免重复添加，并防止与用户的现有配置冲突
-    if ! grep -q "proxy_connect_timeout" "$MAIN_CONF"; then
-        echo "Nginx 主配置 ($MAIN_CONF) 中缺少全局超时配置，尝试添加..."
-        # 在 stream { 块内添加默认超时设置
-        sudo sed -i '/stream {/a\    proxy_connect_timeout 20s;\n    proxy_timeout 5m;' "$MAIN_CONF"
-        echo -e "${GREEN}全局超时配置已添加。${NC}"
-    else
-        echo "Nginx 主配置 ($MAIN_CONF) 中已存在 'stream' 块。正在检查全局超时配置..."
-    fi
-
-    # 4. 【新修复】检查并添加 Stream SSL 模块加载 (解决 ssl_preread 错误)
-    # 查找是否有任何形式的 ngx_stream_ssl_module.so 加载指令
-    if ! grep -q "load_module .*ngx_stream_ssl_module\.so;" "$MAIN_CONF"; then
-        echo -e "${YELLOW}警告: Nginx Stream SSL 模块未加载，正在尝试添加。${NC}"
-        
-        # 尝试在 'worker_processes auto;' 之后添加 load_module 指令
-        # 默认使用 Debian/Ubuntu 系统中最常见的路径
-        SSL_MODULE_LINE="load_module /usr/lib/nginx/modules/ngx_stream_ssl_module.so;"
-        
-        # 查找 worker_processes 行，并在其后添加模块加载
-        if grep -q "worker_processes" "$MAIN_CONF"; then
-            sudo sed -i "/worker_processes/a\ ${SSL_MODULE_LINE}" "$MAIN_CONF"
-            echo -e "${GREEN}Stream SSL 模块加载指令已添加到 $MAIN_CONF。${NC}"
+    # 1. 添加Stream SSL模块
+    if [ -n "$ssl_module" ]; then
+        if ! grep -q "load_module .*ngx_stream_ssl_module\.so" "$MAIN_CONF"; then
+            echo -e "${YELLOW}添加Stream SSL模块: $ssl_module${NC}"
+            sudo sed -i "1i load_module ${ssl_module};" "$MAIN_CONF"
+            needs_restart=1
         else
-            echo -e "${RED}错误: 无法定位添加 load_module 的位置，请手动检查 $MAIN_CONF。${NC}"
+            echo -e "${GREEN}Stream SSL模块已加载${NC}"
         fi
     else
-        echo -e "${GREEN}Nginx Stream SSL 模块加载指令已存在。${NC}"
+        echo -e "${YELLOW}警告: 未找到Stream SSL模块，SSL相关功能可能受限${NC}"
     fi
+    
+    # 2. 添加Stream块
+    if ! grep -q "stream\s*{" "$MAIN_CONF"; then
+        echo -e "${YELLOW}添加Stream配置块${NC}"
+        sudo tee -a "$MAIN_CONF" > /dev/null <<-EOF
+
+# Nginx Stream Manager 配置
+stream {
+    include $CONFIG_FILE;
+}
+EOF
+        needs_restart=1
+    else
+        echo -e "${GREEN}Stream配置块已存在${NC}"
+        
+        # 检查include指令
+        if ! grep -q "include\s*$CONFIG_FILE" "$MAIN_CONF"; then
+            echo -e "${YELLOW}添加include指令${NC}"
+            sudo sed -i '/stream\s*{/a \\tinclude '"$CONFIG_FILE"';' "$MAIN_CONF"
+            needs_restart=1
+        fi
+    fi
+    
+    # 3. 添加全局超时设置
+    if ! grep -q "proxy_connect_timeout" "$MAIN_CONF"; then
+        echo -e "${YELLOW}添加默认超时设置${NC}"
+        sudo sed -i '/stream\s*{/a \\tproxy_connect_timeout 20s;\n\tproxy_timeout 5m;' "$MAIN_CONF"
+        needs_restart=1
+    fi
+    
+    return $needs_restart
 }
 
+# 安装管理脚本
+install_manager() {
+    echo -e "\n--- 安装管理工具 ---"
+    echo "下载管理脚本: $MANAGER_URL"
+    
+    if ! sudo curl -fSL "$MANAGER_URL" -o "$MANAGER_PATH"; then
+        echo -e "${RED}错误: 下载管理脚本失败${NC}"
+        return 1
+    fi
+    
+    sudo chmod +x "$MANAGER_PATH"
+    echo -e "${GREEN}管理工具已安装到: $MANAGER_PATH${NC}"
+    
+    # 添加bash别名
+    if ! grep -q "alias nsm=" ~/.bashrc; then
+        echo "alias nsm='sudo $MANAGER_PATH'" >> ~/.bashrc
+        echo -e "${GREEN}已添加 'nsm' 别名到 ~/.bashrc${NC}"
+        echo "请执行 'source ~/.bashrc' 或重新登录使别名生效"
+    fi
+    
+    return 0
+}
 
-# --- 部署函数 ---
+# 卸载函数
+uninstall() {
+    echo -e "\n${YELLOW}--- 卸载Nginx Stream Manager ---${NC}"
+    
+    # 移除管理脚本
+    if [ -f "$MANAGER_PATH" ]; then
+        sudo rm -f "$MANAGER_PATH"
+        echo -e "${GREEN}已移除管理脚本${NC}"
+    fi
+    
+    # 清理bash别名
+    sed -i '/alias nsm=/d' ~/.bashrc
+    
+    # 恢复原始配置
+    if [ -d "$BACKUP_DIR" ]; then
+        local latest_backup=$(ls -t "$BACKUP_DIR" | grep 'nginx.conf.bak' | head -1)
+        
+        if [ -n "$latest_backup" ]; then
+            echo -e "${YELLOW}恢复Nginx主配置${NC}"
+            sudo cp -f "$BACKUP_DIR/$latest_backup" "$MAIN_CONF"
+        fi
+    else
+        # 尝试自动清理
+        sudo sed -i '/# Nginx Stream Manager/,/}/d' "$MAIN_CONF"
+        sudo sed -i '/load_module .*ngx_stream_ssl_module\.so;/d' "$MAIN_CONF"
+    fi
+    
+    # 移除配置文件
+    if [ -f "$CONFIG_FILE" ]; then
+        sudo rm -f "$CONFIG_FILE"
+    fi
+    
+    restart_nginx_service
+    echo -e "${GREEN}卸载完成!${NC}"
+}
+
+# --- 主部署函数 ---
 deploy() {
-    echo -e "\n--- Nginx Stream Manager (nsm) Deployment Script ---"
-    
-    # 检查是否以 root 权限运行
+    # 检查root权限
     if [ "$EUID" -ne 0 ]; then
-        echo -e "${RED}错误：此脚本必须使用 root 权限 (sudo) 运行。${NC}"
+        echo -e "${RED}错误：此脚本必须使用root权限运行 (sudo)${NC}"
         exit 1
     fi
-
-    echo -e "\n--- Nginx 依赖检查 ---"
-    if ! command -v nginx &> /dev/null; then
-        echo -e "${RED}错误：Nginx 未安装。请先安装 Nginx。${NC}"
-        exit 1
-    fi
-
-    # 创建配置目录和空文件
-    sudo mkdir -p /etc/nginx/conf.d
-    sudo touch "$CONFIG_FILE"
-    echo "清理旧的 stream_proxy.conf 文件中的残留内容..."
-    sudo truncate -s 0 "$CONFIG_FILE"
-
-    # 检查 UDP 模块是否在 Nginx 主配置中被 include 或加载
-    if ! grep -qE "load_module .*ngx_stream_udp_module\.so;|stream \{.*udp" "$MAIN_CONF"; then
-        echo -e "${YELLOW}警告：已确认您的 Nginx 版本不支持 Stream UDP。${NC}"
-        echo -e "${YELLOW}   脚本已配置为仅监听 TCP 端口，以确保配置通过。${NC}"
-    fi
-
-    # 下载 manager.sh
-    echo "Downloading manager.sh from GitHub..."
-    if sudo curl -fsSL "$MANAGER_URL" -o "$MANAGER_PATH"; then
-        echo "Script downloaded successfully to $MANAGER_PATH"
-        echo "Setting executable permissions..."
-        sudo chmod +x "$MANAGER_PATH"
-    else
-        echo -e "${RED}错误：下载 manager.sh 失败。请检查网络连接。${NC}"
-        exit 1
-    fi
-
-    # 配置 Nginx 主配置
-    configure_nginx_main_conf
-
-    echo -e "\n--- 部署后清理与服务启动准备 ---"
     
-    # 清空规则文件中的残留内容
-    echo "清空规则文件 $CONFIG_FILE 中的残留内容..."
-    sudo truncate -s 0 "$CONFIG_FILE"
-
-    # 尝试重启 Nginx 服务
-    echo "尝试重启 Nginx 服务以加载新的 stream 模块配置..."
-    if sudo systemctl restart "$NGINX_SERVICE" 2>/dev/null; then
-        echo -e "${GREEN}Nginx 服务重启成功，已加载 Stream 模块。${NC}"
-    elif sudo service "$NGINX_SERVICE" restart 2>/dev/null; then
-        echo -e "${GREEN}Nginx 服务重启成功，已加载 Stream 模块。${NC}"
-    else
-        echo -e "${YELLOW}警告：Nginx 服务重启失败（可能是首次安装）。请手动检查。${NC}"
+    check_dependencies
+    create_backup
+    local needs_restart=0
+    
+    # 创建配置目录
+    sudo mkdir -p "$(dirname "$CONFIG_FILE")"
+    sudo touch "$CONFIG_FILE"
+    
+    # 配置主文件
+    if configure_nginx_main_conf; then
+        needs_restart=1
     fi
+    
+    # 初始配置文件内容
+    sudo tee "$CONFIG_FILE" > /dev/null <<-EOF
+# Nginx Stream Manager 配置文件
+# 由 nsm 工具自动管理，请勿手动编辑
 
-    # 添加 nsm 别名到 ~/.bashrc (如果不存在)
-    if ! grep -q "alias nsm=" "$HOME/.bashrc"; then
-        echo "alias nsm='sudo $MANAGER_PATH'" >> "$HOME/.bashrc"
-        echo -e "${GREEN}已将 'nsm' 别名添加到 ~/.bashrc。${NC}"
-    else
-        echo "'nsm' alias already exists in $HOME/.bashrc. Skipping addition."
+# 全局默认配置
+proxy_protocol off;
+proxy_responses 1;
+EOF
+    
+    # 安装管理工具
+    install_manager
+    
+    # 需要重启Nginx
+    if [ $needs_restart -eq 1 ]; then
+        validate_nginx_config || return 1
+        restart_nginx_service || {
+            echo -e "${YELLOW}配置已更新但需要手动重启Nginx${NC}"
+            return 1
+        }
     fi
-
-    echo -e "\n--- Deployment Complete! ---"
-    echo -e "${GREEN}✅ The setup is complete.${NC} Nginx 服务已尝试重启。"
-    echo -e "💡 To start the manager, run the original 'one-click' command to start the menu:"
-    echo -e "   sudo curl -fsSL $MANAGER_URL | bash; source ~/.bashrc; nsm"
+    
+    echo -e "\n${GREEN}✓ 部署成功!${NC}"
+    echo -e "使用命令: ${YELLOW}nsm add tcp 8080 example.com:80${NC}"
+    echo -e "添加新的转发规则"
 }
 
-# --- 脚本开始 ---
-deploy
+# --- 执行主函数 ---
+case "$1" in
+    uninstall|remove|--uninstall)
+        uninstall
+        ;;
+    *)
+        deploy
+        ;;
+esac
