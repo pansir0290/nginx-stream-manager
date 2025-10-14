@@ -14,6 +14,9 @@ YELLOW='\033[0;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
+# 用于存储时间戳的全局变量
+CURRENT_TIMESTAMP=""
+
 # --- 核心函数 ---
 
 # 查找SSL模块路径
@@ -40,25 +43,43 @@ find_ssl_module() {
 create_backup() {
     echo -e "${YELLOW}创建配置备份...${NC}"
     sudo mkdir -p "$BACKUP_DIR"
-    local timestamp=$(date +%Y%m%d-%H%M%S)
     
-    sudo cp -f "$MAIN_CONF" "$BACKUP_DIR/nginx.conf.bak-$timestamp"
-    [ -f "$CONFIG_FILE" ] && sudo cp -f "$CONFIG_FILE" "$BACKUP_DIR/stream_proxy.conf.bak-$timestamp"
+    # 获取当前时间戳（如果尚未设置）
+    [ -z "$CURRENT_TIMESTAMP" ] && CURRENT_TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+    
+    sudo cp -f "$MAIN_CONF" "$BACKUP_DIR/nginx.conf.bak-$CURRENT_TIMESTAMP"
+    [ -f "$CONFIG_FILE" ] && sudo cp -f "$CONFIG_FILE" "$BACKUP_DIR/stream_proxy.conf.bak-$CURRENT_TIMESTAMP"
     
     echo -e "${GREEN}配置已备份到: ${YELLOW}$BACKUP_DIR${NC}"
+    echo -e "备份文件: ${GREEN}nginx.conf.bak-$CURRENT_TIMESTAMP${NC}"
+    [ -f "$CONFIG_FILE" ] && echo -e "备份文件: ${GREEN}stream_proxy.conf.bak-$CURRENT_TIMESTAMP${NC}"
 }
 
 # 验证Nginx配置
 validate_nginx_config() {
     echo -e "${YELLOW}验证Nginx配置...${NC}"
+    
+    # 确保有当前时间戳
+    [ -z "$CURRENT_TIMESTAMP" ] && CURRENT_TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+    
     if ! sudo nginx -t > /dev/null 2>&1; then
         echo -e "${RED}错误: Nginx配置验证失败${NC}"
-        echo "尝试恢复原始配置..."
-        sudo cp -f "$BACKUP_DIR/nginx.conf.bak-$timestamp" "$MAIN_CONF"
-        sudo nginx -t || {
+        
+        # 恢复备份
+        echo -e "${YELLOW}尝试恢复原始配置...${NC}"
+        sudo cp -f "$BACKUP_DIR/nginx.conf.bak-$CURRENT_TIMESTAMP" "$MAIN_CONF"
+        [ -f "$BACKUP_DIR/stream_proxy.conf.bak-$CURRENT_TIMESTAMP" ] && \
+            sudo cp -f "$BACKUP_DIR/stream_proxy.conf.bak-$CURRENT_TIMESTAMP" "$CONFIG_FILE"
+        
+        # 重新验证
+        if sudo nginx -t > /dev/null 2>&1; then
+            echo -e "${GREEN}配置已成功恢复${NC}"
+        else
             echo -e "${RED}严重错误: 无法恢复有效配置，请手动修复${NC}"
+            echo -e "错误详情:"
+            sudo nginx -t
             exit 1
-        }
+        fi
         return 1
     fi
     return 0
@@ -169,7 +190,6 @@ install_manager() {
     if ! grep -q "alias nsm=" ~/.bashrc; then
         echo "alias nsm='sudo $MANAGER_PATH'" >> ~/.bashrc
         echo -e "${GREEN}已添加 'nsm' 别名到 ~/.bashrc${NC}"
-        echo "请执行 'source ~/.bashrc' 或重新登录使别名生效"
     fi
     
     return 0
@@ -219,6 +239,12 @@ deploy() {
         exit 1
     fi
     
+    # 生成全局时间戳
+    CURRENT_TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+    
+    # 创建备份目录
+    sudo mkdir -p "$BACKUP_DIR"
+    
     check_dependencies
     create_backup
     local needs_restart=0
@@ -227,36 +253,34 @@ deploy() {
     sudo mkdir -p "$(dirname "$CONFIG_FILE")"
     sudo touch "$CONFIG_FILE"
     
-    # 配置主文件
-    if configure_nginx_main_conf; then
-        needs_restart=1
-    fi
-    
-    # 初始配置文件内容
+    # 初始化配置文件内容 (仅包含注释，避免无效指令)
     sudo tee "$CONFIG_FILE" > /dev/null <<-EOF
 # Nginx Stream Manager 配置文件
 # 由 nsm 工具自动管理，请勿手动编辑
 
-# 全局默认配置
-proxy_protocol off;
-proxy_responses 1;
 EOF
+    
+    # 配置主文件
+    if configure_nginx_main_conf; then
+        needs_restart=1
+    fi
     
     # 安装管理工具
     install_manager
     
     # 需要重启Nginx
     if [ $needs_restart -eq 1 ]; then
-        validate_nginx_config || return 1
-        restart_nginx_service || {
-            echo -e "${YELLOW}配置已更新但需要手动重启Nginx${NC}"
-            return 1
-        }
+        if validate_nginx_config; then
+            restart_nginx_service && echo -e "${GREEN}Nginx已成功重启${NC}"
+        else
+            echo -e "${RED}配置验证失败，Nginx未重启${NC}"
+        fi
     fi
     
     echo -e "\n${GREEN}✓ 部署成功!${NC}"
-    echo -e "使用命令: ${YELLOW}nsm add tcp 8080 example.com:80${NC}"
-    echo -e "添加新的转发规则"
+    echo -e "使用命令: ${YELLOW}nsm add tcp 8080 example.com:80${NC} 添加新的转发规则"
+    echo -e "请执行: ${YELLOW}source ~/.bashrc${NC} 或重新登录以使 nsm 命令生效"
+    echo -e "当前配置备份: ${GREEN}$BACKUP_DIR/${NC}"
 }
 
 # --- 执行主函数 ---
