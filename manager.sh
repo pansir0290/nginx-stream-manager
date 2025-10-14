@@ -39,7 +39,7 @@ setup_environment() {
     fi
 }
 
-# --- 核心修改：使用 echo >&2 隔离警告，确保输出的配置干净 ---
+# --- 核心修改：移除超时指令并隔离警告信息 ---
 generate_config_block() {
     local LISTEN_PORT=$1
     local TARGET_ADDR=$2
@@ -52,11 +52,13 @@ generate_config_block() {
     
     local UDP_LINE="# Nginx不支持UDP: listen ${LISTEN_PORT} udp;"
     
-    # 构建配置块，使用 \n 和 tab 缩进
-    CONFIG_BLOCK="\n    server {\n        listen ${LISTEN_PORT};\n${UDP_LINE}\n        proxy_connect_timeout 20s;\n        proxy_timeout 5m;\n        # 规则标识符: ${LISTEN_PORT} -> ${TARGET_ADDR}"
+    # 构建配置块，注意：移除了 proxy_connect_timeout 和 proxy_timeout
+    # 提醒用户超时指令已全局设置
+    CONFIG_BLOCK="\n    server {\n        listen ${LISTEN_PORT};\n${UDP_LINE}\n        # 超时指令已在 /etc/nginx/nginx.conf 的 stream {} 块中全局设置\n        # 规则标识符: ${LISTEN_PORT} -> ${TARGET_ADDR}"
 
     if [[ "$USE_SSL" =~ ^[Yy]$ ]]; then
-        CONFIG_BLOCK+="\n        ssl_preread on;\n        proxy_ssl_name ${SSL_NAME};"
+        CONFIG_BLOCK+="\n        ssl_preread on;"
+        CONFIG_BLOCK+="\n        proxy_ssl_name ${SSL_NAME};"
     fi
 
     CONFIG_BLOCK+="\n        proxy_pass ${TARGET_ADDR};\n    }"
@@ -92,7 +94,7 @@ add_rule() {
         read -r -p "请输入 proxy_ssl_name (例如: yahoo.com 或 your_domain.com): " SSL_NAME
         if [ -z "$SSL_NAME" ]; then
             SSL_NAME="default_sni" 
-            echo -e "${YELLOW}使用默认 proxy_ssl_name: ${SSL_NAME}${NC}" >&2 # 同样将此警告输出到 stderr
+            echo -e "${YELLOW}使用默认 proxy_ssl_name: ${SSL_NAME}${NC}" >&2 # 将此警告输出到 stderr
         fi
     fi
 
@@ -109,7 +111,7 @@ add_rule() {
     fi
 }
 
-# --- 功能 2: 查看规则 ---
+# --- 功能 2, 3, 4 (查看, 删除, 应用) 保持不变 ---
 view_rules() {
     echo -e "\n${GREEN}--- 当前 Stream 转发配置 (${CONFIG_FILE}) ---${NC}"
     if [ -f "$CONFIG_FILE" ]; then
@@ -135,7 +137,6 @@ view_rules() {
     echo ""
 }
 
-# --- 功能 3: 删除规则 ---
 delete_rule() {
     view_rules
     
@@ -174,7 +175,6 @@ delete_rule() {
     fi
 }
 
-# --- 功能 4: 应用配置并重载 Nginx ---
 apply_config() {
     echo -e "\n${GREEN}--- 测试 Nginx 配置 ---${NC}"
     

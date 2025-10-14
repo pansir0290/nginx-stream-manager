@@ -1,7 +1,6 @@
 #!/bin/bash
 
 # --- Configuration ---
-# 请确保这里是你正确的仓库信息
 REPO_URL="pansir0290/nginx-stream-manager"
 MANAGER_SCRIPT="manager.sh"
 TARGET_PATH="/usr/local/bin/nsm"
@@ -16,28 +15,27 @@ NC='\033[0m' # No Color
 
 echo -e "${GREEN}--- Nginx Stream Manager (nsm) Deployment Script ---${NC}"
 
-# --- 检查与提示升级 Nginx 的函数 (因 UDP 不支持，仅作依赖检查) ---
+# --- 检查 Nginx 依赖和清理 ---
 check_nginx_dependency() {
     echo -e "\n${GREEN}--- Nginx 依赖检查 ---${NC}"
 
     if ! command -v nginx &> /dev/null; then
         echo -e "${YELLOW}警告：Nginx 未安装。请先运行 'sudo apt install nginx -y' 安装。${NC}"
-        # 不退出，让脚本继续部署，但用户需要先安装Nginx才能运行nsm
         return
     fi
     
-    # 清理旧的错误配置，以防测试失败 (使用正确的 tee 命令)
+    # 清理旧的错误配置，使用正确的 tee 命令
     echo "清理旧的 stream_proxy.conf 文件中的残留内容..."
     sudo tee "$CONFIG_FILE" < /dev/null > /dev/null
 
     # 提示用户当前的 UDP 限制
-    echo -e "${YELLOW}警告：经检测，您的 Nginx 版本不支持 Stream UDP。${NC}"
+    echo -e "${YELLOW}警告：已确认您的 Nginx 版本不支持 Stream UDP。${NC}"
     echo -e "   脚本已配置为仅监听 TCP 端口，以确保配置通过。${NC}"
 }
 # --- 检查函数结束 ---
 
 
-# --- 自动化配置 Nginx 主配置的函数 ---
+# --- 自动化配置 Nginx 主配置的函数 (添加全局超时指令) ---
 configure_nginx_main() {
     echo -e "\n${GREEN}--- 检查并配置 Nginx 主配置文件 ---${NC}"
 
@@ -47,12 +45,21 @@ configure_nginx_main() {
     
     # 1. 检查 stream 块是否已存在于主配置
     if grep -q "^stream {" "$MAIN_CONF"; then
-        echo -e "${GREEN}Nginx 主配置 ($MAIN_CONF) 中已存在 'stream' 块。跳过修改。${NC}"
+        echo -e "${GREEN}Nginx 主配置 ($MAIN_CONF) 中已存在 'stream' 块。正在添加全局超时配置...${NC}"
+
+        # 检查是否已存在全局超时配置，避免重复添加
+        if ! grep -q "proxy_connect_timeout" "$MAIN_CONF"; then
+            echo "添加全局 Stream 超时配置..."
+            # 使用 sed 在 stream { 后的第一行插入超时配置
+            sudo sed -i '/^stream {/a \    proxy_connect_timeout 20s;\n    proxy_timeout 5m;' "$MAIN_CONF"
+        fi
+        
         return
     fi
 
     echo "未检测到顶级 'stream' 块。正在自动插入配置..."
-    STREAM_CONFIG="stream {\n    include /etc/nginx/conf.d/stream_proxy.conf;\n}"
+    # 插入配置时，同时包含超时指令和 include
+    STREAM_CONFIG="stream {\n    proxy_connect_timeout 20s;\n    proxy_timeout 5m;\n    include /etc/nginx/conf.d/stream_proxy.conf;\n}"
 
     # 2. 寻找插入点：在 events {} 块的闭合 '}' 之后插入
     EVENTS_START_LINE=$(grep -n "^events {" "$MAIN_CONF" | head -n 1 | cut -d: -f1)
@@ -100,7 +107,7 @@ post_deployment_cleanup() {
 
 # --- 脚本主要流程 ---
 
-# 0. Nginx 兼容性检查和升级提示
+# 0. Nginx 兼容性检查和清理
 check_nginx_dependency
 
 # 1. 检查下载器 (curl/wget)
@@ -129,7 +136,7 @@ fi
 echo "Setting executable permissions..."
 sudo chmod +x "$TARGET_PATH"
 
-# 4. 自动化配置 Nginx 主配置 (插入 stream {})
+# 4. 自动化配置 Nginx 主配置 (插入 stream {} 和全局超时)
 configure_nginx_main
 
 # 5. 执行部署后清理和重启 Nginx
