@@ -203,4 +203,86 @@ delete_rule() {
     
     if [ -z "$PORT_TO_DELETE" ]; then echo -e "${RED}错误：端口号不能为空。${NC}"; return; fi
 
-    LISTEN_LINE=$(grep -n "listen ${PORT_TO_DELETE};"
+    LISTEN_LINE=$(grep -n "listen ${PORT_TO_DELETE};" "$CONFIG_FILE" | cut -d: -f1 | head -n 1)
+
+    if [ -z "$LISTEN_LINE" ]; then
+        echo -e "${RED}错误：未找到监听端口 ${PORT_TO_DELETE} 的规则。${NC}"
+        return
+    fi
+
+    # 使用 sed 定位 server {} 块的开始和结束
+    SERVER_START=$(sed -n "1,${LISTEN_LINE}p" "$CONFIG_FILE" | grep -n "server {" | tail -n 1 | cut -d: -f1)
+    SERVER_END_OFFSET=$(sed -n "${SERVER_START},\$p" "$CONFIG_FILE" | grep -n "}" | head -n 1 | cut -d: -f1)
+    SERVER_END=$((SERVER_START + SERVER_END_OFFSET - 1))
+    
+    if [ -n "$SERVER_START" ] && [ "$SERVER_END" ] && [ "$SERVER_START" -lt "$SERVER_END" ]; then
+        echo -e "${GREEN}正在删除端口 ${PORT_TO_DELETE} 的规则块 (行 $SERVER_START 到 $SERVER_END)...${NC}"
+        
+        # 删除行之前，先删除块前后的空行，避免残留大量空行
+        sudo sed -i "${SERVER_START},${SERVER_END}d" "$CONFIG_FILE"
+        sudo sed -i '/^$/d' "$CONFIG_FILE" # 清理多余空行
+
+        echo -e "${GREEN}规则已删除。${NC}"
+        read -r -p "是否立即应用配置并重载 Nginx? (y/n): " APPLY_NOW
+        if [[ "$APPLY_NOW" =~ ^[Yy]$ ]]; then
+            apply_config
+        fi
+    else
+        echo -e "${RED}错误：无法定位完整的 server 块。请手动检查文件。${NC}"
+    fi
+}
+
+# --- 功能 5: 应用配置并重载 Nginx ---
+apply_config() {
+    echo -e "\n${GREEN}--- 测试 Nginx 配置 ---${NC}"
+    
+    if nginx -t 2>&1 | grep -q "syntax is ok"; then
+        echo -e "${GREEN}配置测试成功! 正在重载 Nginx...${NC}"
+        if sudo systemctl reload "$NGINX_SERVICE"; then
+            echo -e "${GREEN}Nginx 重载成功，新规则已生效。${NC}"
+        else
+            echo -e "${RED}错误：Nginx 重载失败。请检查系统日志 (例如: journalctl -xe)。${NC}"
+        fi
+    else
+        echo -e "${RED}配置测试失败。新配置未应用。${NC}"
+        sudo nginx -t
+    fi
+}
+
+# --- 主菜单 ---
+main_menu() {
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${RED}错误：此脚本必须使用 root 权限 (sudo) 运行。${NC}"
+        exit 1
+    fi
+    
+    setup_environment
+
+    while true; do
+        echo -e "\n${GREEN}=============================================${NC}"
+        echo -e "${GREEN} Nginx Stream 转发管理器 (v1.0) ${NC}"
+        echo -e "${GREEN}=============================================${NC}"
+        echo "1. 配置 SELinux (解决连接被拒问题)"
+        echo "2. 添加新的转发规则"
+        echo "3. 查看当前转发规则"
+        echo "4. 删除转发规则 (按监听端口)"
+        echo "5. 应用配置并重载 Nginx (使更改生效)"
+        echo "6. 退出"
+        echo -e "${GREEN}=============================================${NC}"
+        
+        read -r -p "请选择操作 [1-6]: " CHOICE
+
+        case "$CHOICE" in
+            1) configure_selinux ;; 
+            2) add_rule ;;
+            3) view_rules ;;
+            4) delete_rule ;;
+            5) apply_config ;;
+            6) echo "感谢使用管理器。再见！"; exit 0 ;;
+            *) echo -e "${RED}无效输入，请选择 1 到 6 之间的数字。${NC}" ;;
+        esac
+    done
+}
+
+# --- 脚本开始 ---
+main_menu
