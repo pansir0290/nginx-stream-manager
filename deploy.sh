@@ -5,7 +5,7 @@ REPO_URL="pansir0290/nginx-stream-manager"
 MANAGER_SCRIPT="manager.sh"
 TARGET_PATH="/usr/local/bin/nsm"
 MAIN_CONF="/etc/nginx/nginx.conf"
-CONFIG_FILE="/etc/nginx/conf.d/stream_proxy.conf" # 新增：用于检查和清理
+CONFIG_FILE="/etc/nginx/conf.d/stream_proxy.conf" # 规则文件路径
 
 # Color definitions
 RED='\033[0;31m'
@@ -15,7 +15,7 @@ NC='\033[0m' # No Color
 
 echo -e "${GREEN}--- Nginx Stream Manager (nsm) Deployment Script ---${NC}"
 
-# --- 新增函数：检查并提示升级 Nginx ---
+# --- 检查与提示升级 Nginx 的函数 (保持不变，用于前置依赖检查) ---
 check_and_prompt_nginx_upgrade() {
     echo -e "\n${GREEN}--- Nginx 依赖检查与 UDP 支持验证 ---${NC}"
 
@@ -26,35 +26,33 @@ check_and_prompt_nginx_upgrade() {
     
     # 清理旧的错误配置，以防测试失败
     echo "清理旧的 stream_proxy.conf 文件中的残留内容..."
-    sudo > "$CONFIG_FILE"
-
-    # 尝试用一个仅包含 TCP 监听的临时配置来测试 Nginx 是否能正常工作
-    echo "测试 Nginx 基础配置..."
-    if ! nginx -t &> /dev/null; then
-        echo -e "${RED}严重错误：Nginx 基础配置测试失败，请在继续前手动检查 /etc/nginx/nginx.conf.${NC}"
-        exit 1
-    fi
+    sudo > "$CONFIG_FILE" # 使用 sudo > 是不安全的，但如果 shell 是 root，可以工作。我们用 tee 替代。
+    sudo tee "$CONFIG_FILE" < /dev/null > /dev/null
     
     # 尝试用 UDP 监听配置来测试 Nginx 是否支持 UDP
-    echo "    server { listen 12345 udp; proxy_pass 127.0.0.1:12345; }" | sudo tee -a "$CONFIG_FILE" > /dev/null
-    
     echo "测试 Nginx 是否支持 Stream UDP..."
-    if nginx -t &> /dev/null; then
+    local TEMP_TEST_CONF="/tmp/nsm_udp_test.conf"
+    
+    # 构造一个包含 UDP 监听的临时完整 stream 块
+    echo "stream { server { listen 12345 udp; proxy_pass 127.0.0.1:12345; } }" | tee "$TEMP_TEST_CONF" > /dev/null
+    
+    if sudo nginx -t -c "$TEMP_TEST_CONF" &> /dev/null; then
         echo -e "${GREEN}✅ Nginx 版本支持 Stream UDP 转发。${NC}"
     else
         echo -e "${RED}❌ Nginx 配置测试失败，错误信息表明不支持 'udp' 参数。${NC}"
-        echo "   这通常是 Nginx 缺少编译参数 (--with-stream_udp) 或版本过旧导致的。"
-        echo -e "   ${YELLOW}请手动运行以下命令升级 Nginx，然后重新运行本脚本：${NC}"
-        echo -e "   ${YELLOW}    sudo apt update && sudo apt upgrade nginx -y${NC}"
+        echo "   这通常是 Nginx 缺少编译参数或版本过旧导致的。"
+        echo -e "   ${YELLOW}在继续之前，请务必手动运行： 'sudo apt update && sudo apt upgrade nginx -y'${NC}"
+        echo -e "   ${RED}--- 部署终止 ---${NC}"
         # 退出，让用户解决依赖问题
         exit 1
     fi
     
-    # 清理临时测试配置
-    sudo > "$CONFIG_FILE"
+    sudo rm -f "$TEMP_TEST_CONF" # 清理临时测试配置
 }
+# --- 检查与提示升级 Nginx 的函数结束 ---
 
-# --- 自动化配置 Nginx 主配置的函数 (保留并优化) ---
+
+# --- 自动化配置 Nginx 主配置的函数 (保持不变) ---
 configure_nginx_main() {
     echo -e "\n${GREEN}--- 检查并配置 Nginx 主配置文件 ---${NC}"
 
@@ -72,22 +70,16 @@ configure_nginx_main() {
     STREAM_CONFIG="stream {\n    include /etc/nginx/conf.d/stream_proxy.conf;\n}"
 
     # 2. 寻找插入点：在 events {} 块的闭合 '}' 之后插入
-    
-    # 找到包含 'events {' 的行号
     EVENTS_START_LINE=$(grep -n "^events {" "$MAIN_CONF" | head -n 1 | cut -d: -f1)
     
     if [ -n "$EVENTS_START_LINE" ]; then
-        # 从 events 开始行向下找到第一个 '}'，即 events 块的闭合行
         EVENTS_END_LINE=$(sed -n "${EVENTS_START_LINE},\$p" "$MAIN_CONF" | grep -n "}" | head -n 1 | cut -d: -f1)
         
         if [ -n "$EVENTS_END_LINE" ]; then
-            # 计算 events 块结束的实际行号
             END_OF_EVENTS=$((EVENTS_START_LINE + EVENTS_END_LINE - 1))
             
-            # 使用 sed 在 events 块结束行的下一行插入 stream 块
-            # 使用 'a\\' 插入新行
+            # 插入 stream 块和空行
             sudo sed -i "${END_OF_EVENTS}a\\${STREAM_CONFIG}" "$MAIN_CONF"
-            # 插入一个空行保持格式
             sudo sed -i "${END_OF_EVENTS}a\\" "$MAIN_CONF"
             
             echo -e "${GREEN}'stream' 块已成功插入到 $MAIN_CONF 中。${NC}"
@@ -98,15 +90,36 @@ configure_nginx_main() {
     echo -e "${RED}错误：无法在 $MAIN_CONF 中定位插入点，请手动配置 Nginx。${NC}"
 }
 
+# --- 新增函数：部署后清理和启动准备 ---
+post_deployment_cleanup() {
+    echo -e "\n${GREEN}--- 部署后清理与服务启动准备 ---${NC}"
+    
+    if ! command -v nginx &> /dev/null; then
+        echo -e "${YELLOW}Nginx 未安装，跳过服务操作。${NC}"
+        return
+    fi
+
+    # 1. 清空残留配置 (这确保了 manager.sh 在第一次运行时是干净的)
+    echo "清空规则文件 ${CONFIG_FILE} 中的残留内容..."
+    sudo tee "$CONFIG_FILE" < /dev/null > /dev/null
+    
+    # 2. 立即重启 Nginx 服务 (加载新的 nginx.conf 配置)
+    echo "尝试重启 Nginx 服务以加载新的 stream 模块配置..."
+    if sudo systemctl restart nginx; then
+        echo -e "${GREEN}Nginx 服务重启成功，已加载 Stream 模块。${NC}"
+    else
+        echo -e "${RED}警告：Nginx 服务重启失败！请检查 ${MAIN_CONF} 文件语法。${NC}"
+    fi
+}
+# --- 部署后清理函数结束 ---
+
 
 # --- 脚本主要流程 ---
 
-# 0. Nginx 兼容性检查和升级提示 (新前置步骤)
+# 0. Nginx 兼容性检查和升级提示
 check_and_prompt_nginx_upgrade
 
-# 1. 检查 Nginx 依赖 (Warning only) - 已合并到 check_and_prompt_nginx_upgrade
-
-# 2. Check for downloader (curl/wget) 
+# 1. 检查下载器 (curl/wget) (保持不变)
 DOWNLOADER=""
 if command -v wget &> /dev/null; then
     DOWNLOADER="sudo wget -qO"
@@ -117,11 +130,10 @@ else
     exit 1
 fi 
 
-# 3. Download the main management script 
+# 2. 下载主管理脚本 (保持不变)
 DOWNLOAD_URL="https://raw.githubusercontent.com/${REPO_URL}/main/${MANAGER_SCRIPT}"
 echo "Downloading ${MANAGER_SCRIPT} from GitHub..."
 
-# Execute the download 
 if $DOWNLOADER "$TARGET_PATH" "$DOWNLOAD_URL"; then 
     echo -e "${GREEN}Script downloaded successfully to $TARGET_PATH${NC}"
 else 
@@ -129,19 +141,21 @@ else
     exit 1
 fi 
 
-# 4. Set executable permissions 
+# 3. 设置执行权限 (保持不变)
 echo "Setting executable permissions..."
 sudo chmod +x "$TARGET_PATH"
 
-# 5. 自动化配置 Nginx 主配置 (确保顶级 stream {} 存在)
+# 4. 自动化配置 Nginx 主配置 (插入 stream {})
 configure_nginx_main
 
-# 6. Set user-friendly function (nsm) 
-# ... (保持不变) ...
+# 5. 执行部署后清理和重启 Nginx (新步骤)
+post_deployment_cleanup
 
-# 自动检测并选择 Shell 配置文件
+# 6. 设置用户友好函数 (nsm) (保持不变)
 ALIAS_COMMAND="nsm() { sudo $TARGET_PATH \"\$@\"; }"
 ALIAS_CHECK="nsm()"
+
+# 自动检测并选择 Shell 配置文件
 if [ -n "$ZSH_VERSION" ]; then
     SHELL_CONFIG="$HOME/.zshrc"
     echo "Detected Zsh. Using $SHELL_CONFIG for 'nsm' function."
@@ -149,7 +163,6 @@ elif [ -n "$BASH_VERSION" ]; then
     SHELL_CONFIG="$HOME/.bashrc"
     echo "Detected Bash. Using $SHELL_CONFIG for 'nsm' function."
 else
-    # 默认使用 bashrc
     SHELL_CONFIG="$HOME/.bashrc"
     echo "Defaulting to $SHELL_CONFIG for 'nsm' function."
 fi
@@ -169,9 +182,8 @@ fi
 
 # 7. 提示用户下次如何启动 
 echo -e "\n${GREEN}--- Deployment Complete! ---${NC}"
-echo "✅ The setup is complete."
-echo -e "💡 要启动管理器，请先执行 ${YELLOW}source $SHELL_CONFIG${NC}，然后运行 ${GREEN}nsm${NC}"
-echo -e "    或者，使用最初的 '一键启动' 命令启动菜单："
+echo "✅ The setup is complete. Nginx 服务已尝试重启。"
+echo -e "💡 To start the manager, run the original 'one-click' command to start the menu:"
 echo -e "    ${YELLOW}sudo curl -fsSL https://raw.githubusercontent.com/${REPO_URL}/main/deploy.sh | bash; source $SHELL_CONFIG; nsm${NC}"
 
 exit 0
