@@ -1,101 +1,108 @@
-这是我为你精心编写的中文版 README 文档，它简洁、专业，并包含了针对小白用户的详细安装和使用指导。
+Markdown
 
-这份文档使用了 Markdown 格式，可以直接复制粘贴到你的 GitHub 仓库中，它会自动渲染出漂亮的样式。
+# Nginx Stream Manager (NSM)
 
-🚀 Nginx Stream 转发管理器 (NSM)
+![Version](https://img.shields.io/badge/Version-1.0.1%20(Stable)-blue)
+![License](https://img.shields.io/github/license/pansir0290/nginx-stream-manager?color=orange)
+![OS Compatibility](https://img.shields.io/badge/OS-Debian%20%7C%20Ubuntu%20%7C%20CentOS-green)
 
-一键脚本，傻瓜式操作：专为 VPS 用户设计的 Nginx Stream 端口转发管理工具。无需手动编辑 Nginx 配置文件，通过交互式菜单轻松实现 TCP/UDP 端口转发的添加、查看和删除。
+Nginx Stream Manager (NSM) 是一个简单、易用的 Shell 脚本工具，旨在帮助 Linux 用户快速配置和管理 Nginx 的 Stream 模块（四层代理），实现 TCP/UDP 端口的转发与代理。特别支持 SSL/TLS 预读功能，用于根据 SNI 路由流量。
 
-✨ 主要功能
+## 🚀 核心功能
 
-    一键安装与部署：通过单行命令完成所有环境配置。
+* **端口转发:** 轻松设置 TCP 和 UDP 端口转发到目标 IP 和端口。
+* **SSL 预读支持:** 利用 Nginx 的 `ssl_preread` 功能，根据客户端请求的 SNI 信息进行更智能的代理。
+* **配置管理:** 自动添加、修改和删除 Stream 代理规则。
+* **服务控制:** 一键重启/重载 Nginx 服务以应用配置。
+* **环境检查:** 自动检查 Nginx 核心配置和 Stream 模块的加载状态。
 
-    交互式菜单：中文操作界面，小白用户也能轻松上手。
+## 📋 兼容性要求
 
-    TCP/UDP 支持：同时配置 TCP 和 UDP 转发。
+本脚本要求您的系统满足以下条件：
 
-    SSL/TLS 嗅探：支持配置 ssl_preread 实现基于 SNI 的转发（可选）。
+1.  **操作系统:** 兼容主流 Linux 发行版 (Debian 10+, Ubuntu 18.04+, CentOS 7+)。
+2.  **权限:** 必须以 `root` 用户或具有 `sudo` 权限的用户运行。
+3.  **核心组件:** `curl`, `nginx`, `sudo`, `vim` 或 `nano`。
 
-    热加载：配置更改后自动测试并重载 Nginx，无需中断服务。
+## 💡 安装依赖
 
-🛠️ 安装与部署 (一键启动)
+在运行部署脚本之前，请确保您的系统已安装所有必要的组件。
 
-1. 环境要求
+**对于 Debian/Ubuntu 系统:**
 
-    一台运行 Linux 的 VPS (推荐 Ubuntu/Debian/CentOS)。
+```bash
+sudo apt update
+sudo apt install -y curl vim sudo nginx net-tools iproute2
 
-    已安装 Nginx（脚本会提示安装，但需用户手动执行）。
-
-    curl 或 wget 工具（通常系统自带）。
-
-2. 执行一键脚本
-
-请在您的 VPS 终端中，以 root 用户或使用 sudo 权限 运行以下单行命令。
-
-这个命令会完成：下载、安装、配置 nsm 命令，并立即启动管理菜单。
+对于 CentOS/RHEL/Fedora 系统:
 Bash
 
-sudo curl -fsSL https://raw.githubusercontent.com/pansir0290/nginx-stream-manager/main/deploy.sh | bash; source ~/.bashrc; nsm
+sudo yum install -y curl vim sudo nginx net-tools iproute2
+# 或使用 dnf
+# sudo dnf install -y curl vim sudo nginx net-tools iproute2
 
-3. 后续启动
+    注意： net-tools 或 iproute2 用于端口占用检查。如果您的 Nginx 是从源码编译安装，请确保已启用 ngx_stream_module 和 ngx_stream_ssl_module。
 
-首次运行后，nsm 命令已被添加到您的系统环境中。
+🛠️ 部署脚本
 
-您只需：
+执行以下命令即可部署 Nginx Stream Manager (NSM)。脚本会自动下载、安装并配置环境，然后创建别名。
+Bash
 
-    打开一个新的终端会话 (SSH 断开重连)。
+sudo curl -fsSL [https://raw.githubusercontent.com/pansir0290/nginx-stream-manager/main/deploy.sh](https://raw.githubusercontent.com/pansir0290/nginx-stream-manager/main/deploy.sh) | bash
 
-    输入 nsm 即可随时启动管理器。
+运行完成后，请执行以下命令以确保 nsm 命令别名生效：
+Bash
 
+source ~/.bashrc
+
+🖥️ 使用方法
+
+部署成功后，只需在终端输入 nsm 即可启动管理菜单。
 Bash
 
 nsm
 
-🖥️ 使用指南 (菜单操作)
+主菜单选项说明
 
-启动管理器后，您将看到一个简单的中文菜单：
+选项	命令	描述
+1	添加或修改代理规则	引导式添加新的端口转发规则，支持 TCP/UDP 和 SSL 预读配置。
+2	删除现有代理规则	查看所有已配置的规则，并按序号删除指定的规则。
+3	重启 Nginx	检查 Nginx 配置语法并重载/重启 Nginx 服务，使规则生效。
+4	系统状态检查	检查 Nginx 服务状态、配置包含状态、Stream SSL 模块加载状态等。
+0	退出 NSM	退出管理工具。
 
-=============================================
- Nginx Stream 转发管理器 (v1.0) 
-=============================================
-1. 添加新的转发规则
-2. 查看当前转发规则
-3. 删除转发规则 (按监听端口)
-4. 应用配置并重载 Nginx (使更改生效)
-5. 退出
-=============================================
-请选择操作 [1-5]: 
+⭐ 注意事项与故障排查
 
-步骤 A: 添加转发规则 (选项 1)
+1. Nginx Stream 模块
 
-    输入监听端口：这是您 VPS 上对外开放的端口。
+NSM 依赖于 Nginx 的 Stream 模块。大多数发行版安装的 Nginx 默认包含该模块。如果在使用 TCP/UDP 或 ssl_preread 时报错，请运行菜单中的 4) 系统状态检查，并确保 Nginx 主配置文件中已正确加载 ngx_stream_ssl_module.so。如果缺失，脚本会尝试自动修复。
 
-        示例：55203
+2. SELinux (CentOS/RHEL 用户)
 
-    输入目标地址：这是您要转发到的后端服务器地址（必须是 IP:端口 格式）。
+如果您的系统启用了 SELinux，可能会阻止 Nginx 监听高权限端口。
 
-        示例：192.168.1.100:443
+    脚本会尝试临时禁用 SELinux (setenforce 0) 并修改配置文件永久禁用。
 
-    是否启用 SSL 预读 (y/n)：
+    强烈建议在部署后，重启系统使 SELinux 永久禁用生效，以避免后续端口转发失败。
 
-        如果您转发的是 TLS/SSL 加密流量（例如 HTTPS、WSS、Socks5-TLS），建议选 y。这允许 Nginx 根据域名 (SNI) 进行更智能的转发。
+3. 配置路径
 
-        如果您转发的是普通 TCP/UDP 裸流，选 n。
+所有规则文件都存储在以下路径：
 
-步骤 B: 应用配置 (选项 4)
+    主规则文件: /etc/nginx/conf.d/nsm/nsm-stream.conf
 
-重要！ 只有执行此步骤，您新增或删除的规则才会真正生效。
+    备份目录: /etc/nginx/conf.d/nsm/backups
 
-    选择 4. 应用配置并重载 Nginx。
+如果遇到配置问题，您可以手动检查或恢复备份文件。
 
-    脚本将自动检查配置语法。
+4. 日志文件
 
-    如果检查通过，Nginx 服务将重载，您的新规则立即生效。
+脚本的所有操作和错误信息都会记录在：
 
-⚙️ 工作原理
+    日志文件: /var/log/nsm-manager.log
 
-本工具通过修改 Nginx 配置目录下的 /etc/nginx/conf.d/stream_proxy.conf 文件来实现转发。
+遇到任何问题时，查看此文件可以帮助您定位故障。
 
-所有的转发规则都集中在这个文件中，方便管理和审计。
+📜 许可协议
 
-注意： 本工具假设您的 Nginx 主配置文件已正确配置了 stream 模块并包含了 /etc/nginx/conf.d/*.conf。如果您的 Nginx 无法启动，请检查您的 /etc/nginx/nginx.conf 文件。
+本项目遵循 MIT 协议。
