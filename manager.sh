@@ -540,4 +540,16 @@ main_menu_entry() {
 }
 
 # 脚本启动
-main_menu_entry
+if [ "$1" = "init_config_dir" ]; then
+    check_root
+    init_config_dir
+    exit 0 # 成功执行后退出
+elif [ "$1" = "install_components" ]; then
+    check_root
+    detect_os
+    install_components
+    exit 0 # 成功执行后退出
+else
+    # 正常启动菜单
+    main_menu_entry
+fi
