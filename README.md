@@ -33,6 +33,7 @@ Markdown
 
 ```bash
 # 确保在 Debian/Ubuntu/CentOS 系统上以 root 或 sudo 权限运行
+
 sudo curl -fsSL [https://raw.githubusercontent.com/pansir0290/nginx-stream-manager/main/deploy.sh](https://raw.githubusercontent.com/pansir0290/nginx-stream-manager/main/deploy.sh) | bash
 
 > **🛑 请务必复制上方代码块中的完整命令，避免粘贴时命令不完整！
