@@ -1,6 +1,8 @@
 #!/bin/bash
 # -----------------------------------------------------------------------------
 # Nginx Stream Manager (NSM) 部署脚本
+# 功能：自动检测OS、安装依赖、安装Nginx Stream模块、清理配置冲突、
+#      下载 manager.sh 并设置 nsm 命令别名。
 # -----------------------------------------------------------------------------
 
 set -e # 遇到任何错误立即退出
@@ -18,7 +20,7 @@ YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# 日志函数定义 (已修复，包含 log_warning)
+# 日志函数定义
 log_info() {
     echo -e "${CYAN}[INFO]${NC} $1"
 }
@@ -29,7 +31,6 @@ log_success() {
 
 log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
-    # 在错误发生时，可能需要更清晰的退出提示
 }
 
 log_warning() {
@@ -65,7 +66,21 @@ install_dependencies() {
 
     if [ "$OS" = "debian" ] || [ "$OS" = "ubuntu" ]; then
         sudo apt update
+        
+        # 🎯 核心清理步骤：解决已知的 Nginx 包冲突和旧版本 ABI 问题
+        log_info "正在检查并清理可能存在的旧版/冲突 Nginx 包以解决依赖问题..."
+        
+        # 目标：移除导致冲突的旧版 nginx-common 和可能破碎的 libnginx-mod-stream
+        sudo apt remove -y nginx-common libnginx-mod-stream &>/dev/null || true
+        
+        # 强制解决依赖问题（例如修复 held broken packages）
+        sudo apt -f install -y &>/dev/null || true
+        
+        # 重新运行更新，确保包信息最新
+        sudo apt update
+        
         # 安装基础依赖、Nginx、以及端口检测工具
+        # 这会安装最新的 nginx-common 和 nginx 核心包，解决冲突
         sudo apt install -y curl vim sudo nginx net-tools iproute2
 
         # 核心修复: 确保安装 libnginx-mod-stream 包，包含 Stream SSL 模块
