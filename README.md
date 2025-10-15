@@ -28,8 +28,9 @@ Markdown
 
 我们推荐使用一键部署脚本，它将自动安装所有依赖（包括 Nginx Stream 模块）、下载管理脚本并设置 `nsm` 命令。**您无需担心 Stream 模块缺失或配置冲突问题。**
 
-**步骤 1: 部署并安装**
-运行以下命令，完成所有环境配置和安装：
+### 步骤 1: 部署并安装
+
+**运行以下命令，完成所有环境配置和安装：**
 
 ```bash
 # 确保在 Debian/Ubuntu/CentOS 系统上以 root 或 sudo 权限运行
@@ -42,6 +43,7 @@ sudo curl -fsSL [https://raw.githubusercontent.com/pansir0290/nginx-stream-manag
 Bash
 
 source ~/.bashrc # 或 source /root/.bashrc
+
 💡 手动安装依赖（如果一键部署失败）
 
 如果您的系统环境特殊，可以手动安装依赖：
