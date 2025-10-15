@@ -32,6 +32,10 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
 # 检查是否以root运行
 check_root() {
     if [ "$(id -u)" -ne 0 ]; then
