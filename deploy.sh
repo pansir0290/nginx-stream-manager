@@ -67,27 +67,35 @@ install_dependencies() {
     if [ "$OS" = "debian" ] || [ "$OS" = "ubuntu" ]; then
         sudo apt update
         
-        # 🎯 核心清理步骤：解决已知的 Nginx 包冲突和旧版本 ABI 问题
-        log_info "正在检查并清理可能存在的旧版/冲突 Nginx 包以解决依赖问题..."
+        # 🎯 核心清理步骤：强制清除Nginx冲突包，解决官方源和系统源的ABI冲突
+        log_info "正在检查并强制清理所有 Nginx 相关包以解决依赖和官方源冲突..."
         
-        # 目标：移除导致冲突的旧版 nginx-common 和可能破碎的 libnginx-mod-stream
-        sudo apt remove -y nginx-common libnginx-mod-stream &>/dev/null || true
+        # 1. 强制彻底移除所有与 Nginx 相关的包，以打破依赖循环冲突。
+        # 此操作会中断 Web 服务并清除原有配置，已在 README 中警告。
+        sudo apt purge -y nginx* nginx-full nginx-common libnginx-mod-stream &>/dev/null || true
         
-        # 强制解决依赖问题（例如修复 held broken packages）
+        # 2. 强制解决依赖问题并清理残留
         sudo apt -f install -y &>/dev/null || true
+        sudo apt autoremove -y &>/dev/null || true
         
         # 重新运行更新，确保包信息最新
         sudo apt update
         
-        # 安装基础依赖、Nginx、以及端口检测工具
-        # 这会安装最新的 nginx-common 和 nginx 核心包，解决冲突
+        # 3. 重新安装 Nginx 核心和基础依赖，让系统选择最兼容的版本
         sudo apt install -y curl vim sudo nginx net-tools iproute2
 
-        # 核心修复: 确保安装 libnginx-mod-stream 包，包含 Stream SSL 模块
+        # 核心修复: 确保安装 libnginx-mod-stream 包
         log_info "正在检查并安装 Nginx Stream 模块..."
+        
+        # 尝试安装模块包。对于 Nginx 官方源，此包可能冲突，我们允许失败并继续。
         if ! dpkg -l | grep -q "libnginx-mod-stream"; then
-            sudo apt install -y libnginx-mod-stream
-            log_success "Nginx Stream 模块安装完成。"
+            # 使用 || true 确保即使安装失败，脚本也继续运行
+            sudo apt install -y libnginx-mod-stream || true
+            if dpkg -l | grep -q "libnginx-mod-stream"; then
+                log_success "Nginx Stream 模块安装完成 (来自官方源或系统源)。"
+            else
+                log_warning "Nginx Stream 模块包安装失败，但Nginx核心已安装。继续部署，假设模块已内置或动态加载。"
+            fi
         else
             log_info "Nginx Stream 模块已安装。"
         fi
