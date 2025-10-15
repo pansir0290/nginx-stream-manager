@@ -67,11 +67,11 @@ install_dependencies() {
     if [ "$OS" = "debian" ] || [ "$OS" = "ubuntu" ]; then
         sudo apt update
         
-        # 🎯 核心清理步骤：强制清除Nginx冲突包，解决官方源和系统源的ABI冲突
+        # 🎯 核心清理步骤：解决已知的 Nginx 包冲突和官方源 ABI 问题
         log_info "正在检查并强制清理所有 Nginx 相关包以解决依赖和官方源冲突..."
         
-        # 1. 强制彻底移除所有与 Nginx 相关的包，以打破依赖循环冲突。
-        # 此操作会中断 Web 服务并清除原有配置，已在 README 中警告。
+        # 1. 强制移除所有与 Nginx 冲突的包，包括核心 Nginx 自身，以打破循环冲突
+        # 使用 --purge 确保彻底清除配置文件，防止冲突残留
         sudo apt purge -y nginx* nginx-full nginx-common libnginx-mod-stream &>/dev/null || true
         
         # 2. 强制解决依赖问题并清理残留
@@ -81,15 +81,14 @@ install_dependencies() {
         # 重新运行更新，确保包信息最新
         sudo apt update
         
-        # 3. 重新安装 Nginx 核心和基础依赖，让系统选择最兼容的版本
+        # 3. 重新安装 Nginx 核心、基础依赖
         sudo apt install -y curl vim sudo nginx net-tools iproute2
 
-        # 核心修复: 确保安装 libnginx-mod-stream 包
+        # 核心修复: 确保安装 libnginx-mod-stream 包，包含 Stream SSL 模块
         log_info "正在检查并安装 Nginx Stream 模块..."
         
-        # 尝试安装模块包。对于 Nginx 官方源，此包可能冲突，我们允许失败并继续。
+        # 尝试安装模块包，如果失败（如使用 Nginx 官方源），则忽略并警告
         if ! dpkg -l | grep -q "libnginx-mod-stream"; then
-            # 使用 || true 确保即使安装失败，脚本也继续运行
             sudo apt install -y libnginx-mod-stream || true
             if dpkg -l | grep -q "libnginx-mod-stream"; then
                 log_success "Nginx Stream 模块安装完成 (来自官方源或系统源)。"
@@ -111,7 +110,7 @@ install_dependencies() {
     fi
 }
 
-# 核心自愈功能：清除配置冲突并重载 Nginx
+# 核心自愈功能：清除配置冲突并启动/重启 Nginx
 cleanup_nginx_config() {
     log_info "正在清理 Nginx 主配置文件中的重复或错误的 load_module 指令..."
     
@@ -127,13 +126,19 @@ cleanup_nginx_config() {
         log_info "未检测到冲突的 Stream 模 块 加 载 指 令 ， 跳 过 清 理 。"
     fi
     
-    # 无论是否清理，都要尝试重载 Nginx，确保新安装的模块被加载
-    log_info "尝试重载 Nginx 服务以确保环境就绪..."
-    if sudo systemctl reload nginx 2>/dev/null; then
-        log_success "Nginx 服务重载成功。环境已就绪。"
+    # 无论是否清理，都要尝试启动/重启 Nginx (使用 restart 兼容性更好)
+    log_info "尝试启动或重启 Nginx 服务以确保环境就绪..."
+    
+    if sudo systemctl restart nginx 2>/dev/null; then
+        log_success "Nginx 服务启动/重启成功。环境已就绪。"
         return 0
     else
-        log_error "Nginx 重载失败。请立即运行 'sudo nginx -t' 手动检查配置错误。部署脚本终止。"
+        # 如果重启失败，首先测试配置是否正确，防止误报
+        if sudo nginx -t 2>/dev/null; then
+            log_error "Nginx 重启失败，但配置测试通过。请手动检查 Nginx 服务状态。部署脚本终止。"
+        else
+            log_error "Nginx 重启失败，且配置测试失败。请立即运行 'sudo nginx -t' 手动检查配置错误。部署脚本终止。"
+        fi
         return 1
     fi
 }
