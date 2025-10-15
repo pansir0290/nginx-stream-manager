@@ -40,6 +40,7 @@ sudo curl -fsSL [https://raw.githubusercontent.com/pansir0290/nginx-stream-manag
 Bash
 
 source ~/.bashrc # 或 source /root/.bashrc
+
 💡 手动安装依赖（如果一键部署失败）
 
 如果您的系统环境特殊，可以手动安装依赖：
@@ -119,7 +120,7 @@ Bash
 
 sudo rm -f /usr/local/bin/nsm
 3. 移除别名 (可选):
-手动编辑您的 .bashrc 或 .zshrc 文件，删除 alias nsm='...' 这一行。
+手动编辑您的 .bashrc 或 .zshrc 文件，删除 alias nsm='...' `这一行。
 
 4. 重载 Nginx:
 
@@ -128,4 +129,3 @@ Bash
 sudo systemctl reload nginx
 📜 许可协议
 本项目遵循 MIT 协议。
-
