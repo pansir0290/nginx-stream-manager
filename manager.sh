@@ -1,284 +1,445 @@
 #!/bin/bash
+# Nginx Stream Manager v4.0 - 优化UI版
+# 作者：您的名字
+# 更新日期：$(date +%Y-%m-%d)
 
-# --- 配置参数 (必须与 deploy.sh 一致) ---
+# ANSI颜色代码
+RED='\033[1;31m'
+GREEN='\033[1;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[1;34m'
+MAGENTA='\033[1;35m'
+CYAN='\033[1;36m'
+NC='\033[0m' # 重置颜色
+BOLD='\033[1m'
+
+# 配置路径
 CONFIG_FILE="/etc/nginx/conf.d/stream_proxy.conf"
-BACKUP_DIR="/etc/nginx/conf-backup"
-NGINX_SERVICE="nginx"
-TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+NGINX_CONF="/etc/nginx/nginx.conf"
+BACKUP_DIR="/etc/nginx/conf.d/backups"
+LOG_FILE="/var/log/nsm.log"
 
-# 颜色定义
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-RED='\033[0;31m'
-BLUE='\033[0;34m'
-NC='\033[0m' # 恢复默认颜色
+# 安装模式处理
+if [ "$1" == "--install" ]; then
+    echo -e "${GREEN}▶ 安装Nginx Stream Manager...${NC}"
+    echo -e "${CYAN}1. 下载主脚本${NC}"
+    curl -fsSL -o /usr/local/bin/nsm-manager \
+        https://raw.githubusercontent.com/pansir0290/nginx-stream-manager/main/manager.sh
+    chmod +x /usr/local/bin/nsm-manager
+    
+    echo -e "${CYAN}2. 创建命令行别名${NC}"
+    if ! grep -q "alias nsm=" ~/.bashrc; then
+        echo "alias nsm='sudo nsm-manager'" >> ~/.bashrc
+    fi
+    source ~/.bashrc
+    
+    echo -e "${CYAN}3. 初始化配置${NC}"
+    mkdir -p "$(dirname "$CONFIG_FILE")" &>/dev/null
+    mkdir -p "$BACKUP_DIR" &>/dev/null
+    
+    echo -e "${GREEN}✅ 安装完成！${NC}"
+    echo -e "使用 ${YELLOW}nsm menu${NC} 启动管理界面"
+    sleep 2
+    nsm-manager menu
+    exit 0
+fi
 
-# --- 功能函数 ---
-
-# 配置备份函数
-backup_config() {
-    sudo cp "$CONFIG_FILE" "$BACKUP_DIR/stream_proxy.conf.bak-$TIMESTAMP"
-    echo -e "${YELLOW}配置文件已备份: ${BACKUP_DIR}/stream_proxy.conf.bak-$TIMESTAMP${NC}"
+# 检查root权限
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${RED}错误：此脚本必须使用sudo或root运行${NC}"
+        exit 1
+    fi
 }
 
-# Nginx 重启函数
-restart_nginx() {
-    echo -e "${YELLOW}重新加载Nginx配置...${NC}"
-    
-    # 验证配置语法
-    if ! sudo nginx -t 2>/dev/null; then
-        echo -e "${RED}错误: Nginx配置验证失败，正在恢复备份...${NC}"
-        sudo cp -f "$BACKUP_DIR/stream_proxy.conf.bak-$TIMESTAMP" "$CONFIG_FILE"
-        return 1
+# 获取Nginx状态
+nginx_status() {
+    if systemctl is-active --quiet nginx; then
+        echo -e "${GREEN}运行中${NC}"
+    else
+        echo -e "${RED}已停止${NC}"
     fi
-    
-    # 尝试不同方式重启
-    if systemctl list-unit-files | grep -q "^${NGINX_SERVICE}.service"; then
-        sudo systemctl reload "$NGINX_SERVICE" && return 0
-    fi
-    
-    if command -v service > /dev/null; then
-        sudo service "$NGINX_SERVICE" reload && return 0
-    fi
-    
-    echo -e "${RED}警告: 自动重载失败，请手动执行: ${YELLOW}nginx -s reload${NC}"
-    return 1
 }
 
-# 规则格式验证
-validate_rule() {
-    local protocol=$1
-    local listen_port=$2
-    local target=$3
+# 显示标题
+show_header() {
+    clear
+    echo -e "${CYAN}"
+    echo "╔═══════════════════════════════════════════╗"
+    echo "║   ${BOLD}Nginx Stream Manager ${MAGENTA}v4.0${NC}${CYAN}   ║"
+    echo "╟───────────────────────────────────────────╢"
+    echo "║  状态: $(nginx_status)  | 规则: $(grep -c "server {" $CONFIG_FILE 2>/dev/null)   ║"
+    echo "╚═══════════════════════════════════════════╝${NC}"
+}
+
+# 主菜单
+main_menu() {
+    while true; do
+        show_header
+        echo -e "${CYAN}1. 端口转发规则管理${NC}"
+        echo -e "${CYAN}2. 查看当前所有规则${NC}"
+        echo -e "${CYAN}3. 服务控制${NC}"
+        echo -e "${CYAN}4. 系统管理${NC}"
+        echo -e "${RED}0. 退出${NC}"
+        echo -e "${YELLOW}────────────────────────────${NC}"
+        echo -ne "${BOLD}请选择操作 [0-4]: ${NC}"
+        read choice
+        
+        case $choice in
+            1) rules_menu ;;
+            2) list_rules ;;
+            3) service_menu ;;
+            4) system_menu ;;
+            0) echo -e "${GREEN}感谢使用！${NC}"; exit 0 ;;
+            *) echo -e "${RED}无效选项，请重新选择${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
+# 规则管理菜单
+rules_menu() {
+    while true; do
+        show_header
+        echo -e "${CYAN}════════ 端口转发管理 ════════${NC}"
+        echo -e "${GREEN}1. 添加新转发规则${NC}"
+        echo -e "${YELLOW}2. 删除已有规则${NC}"
+        echo -e "${CYAN}3. 批量导入规则${NC}"
+        echo -e "${MAGENTA}0. 返回主菜单${NC}"
+        echo -e "${YELLOW}────────────────────────────${NC}"
+        echo -ne "${BOLD}请选择操作 [0-3]: ${NC}"
+        read choice
+        
+        case $choice in
+            1) add_rule_menu ;;
+            2) delete_rule_menu ;;
+            3) batch_import_menu ;;
+            0) return ;;
+            *) echo -e "${RED}无效选项，请重新选择${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
+# 服务控制菜单
+service_menu() {
+    while true; do
+        show_header
+        echo -e "${CYAN}════════ 服务控制 ════════${NC}"
+        echo -e "${GREEN}1. 启动Nginx服务${NC}"
+        echo -e "${RED}2. 停止Nginx服务${NC}"
+        echo -e "${YELLOW}3. 重启Nginx服务${NC}"
+        echo -e "${CYAN}4. 检查配置状态${NC}"
+        echo -e "${MAGENTA}0. 返回主菜单${NC}"
+        echo -e "${YELLOW}────────────────────────────${NC}"
+        echo -ne "${BOLD}请选择操作 [0-4]: ${NC}"
+        read choice
+        
+        case $choice in
+            1) start_nginx ;;
+            2) stop_nginx ;;
+            3) restart_nginx ;;
+            4) check_nginx_config ;;
+            0) return ;;
+            *) echo -e "${RED}无效选项，请重新选择${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
+# 系统管理菜单
+system_menu() {
+    while true; do
+        show_header
+        echo -e "${CYAN}════════ 系统管理 ════════${NC}"
+        echo -e "${GREEN}1. 备份当前配置${NC}"
+        echo -e "${YELLOW}2. 恢复配置${NC}"
+        echo -e "${CYAN}3. 更新管理器${NC}"
+        echo -e "${RED}4. 卸载管理器${NC}"
+        echo -e "${MAGENTA}0. 返回主菜单${NC}"
+        echo -e "${YELLOW}────────────────────────────${NC}"
+        echo -ne "${BOLD}请选择操作 [0-4]: ${NC}"
+        read choice
+        
+        case $choice in
+            1) backup_config ;;
+            2) restore_config_menu ;;
+            3) update_manager ;;
+            4) uninstall_menu ;;
+            0) return ;;
+            *) echo -e "${RED}无效选项，请重新选择${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
+# 添加规则菜单
+add_rule_menu() {
+    show_header
+    echo -e "${CYAN}════════ 添加转发规则 ════════${NC}"
     
-    # 验证端口格式
-    if ! [[ $listen_port =~ ^[0-9]+$ ]] || [ $listen_port -lt 1 ] || [ $listen_port -gt 65535 ]; then
-        echo -e "${RED}错误: 监听端口必须是1-65535的整数${NC}"
+    # 协议选择
+    while true; do
+        echo -e "选择协议:"
+        echo -e "${GREEN}1. TCP${NC} (网页/远程桌面)"
+        echo -e "${GREEN}2. UDP${NC} (视频流/游戏)"
+        echo -e "${GREEN}3. TCP+UDP${NC} (双协议)"
+        echo -ne "${BOLD}请选择 [1-3]: ${NC}"
+        read protocol_choice
+        
+        case $protocol_choice in
+            1) protocol="tcp"; break ;;
+            2) protocol="udp"; break ;;
+            3) protocol="tcpudp"; break ;;
+            *) echo -e "${RED}无效选项，请重新选择${NC}" ;;
+        esac
+    done
+    
+    # 端口输入
+    while true; do
+        echo -ne "${BOLD}输入监听端口 (1-65535): ${NC}"
+        read port
+        if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
+            break
+        else
+            echo -e "${RED}端口无效，请输入1-65535之间的数字${NC}"
+        fi
+    done
+    
+    # 目标地址
+    while true; do
+        echo -ne "${BOLD}输入目标地址 (格式: 服务器IP或域名:端口): ${NC}"
+        read target
+        if [[ "$target" =~ ^[a-zA-Z0-9.-]+:[0-9]+$ ]]; then
+            break
+        else
+            echo -e "${RED}格式无效，请使用 服务器:端口 格式${NC}"
+        fi
+    done
+    
+    # 描述信息
+    echo -ne "${BOLD}规则描述 (可选): ${NC}"
+    read description
+    
+    # 确认信息
+    show_header
+    echo -e "${CYAN}═════ 规则确认 ═════${NC}"
+    echo -e "协议:     ${GREEN}$protocol${NC}"
+    echo -e "监听端口: ${GREEN}$port${NC}"
+    echo -e "目标地址: ${GREEN}$target${NC}"
+    echo -e "描述:     ${GREEN}${description:-"未提供描述"}${NC}"
+    echo -e "${YELLOW}────────────────────────────${NC}"
+    
+    echo -ne "${BOLD}是否添加此规则? [y/N]: ${NC}"
+    read confirm
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        add_rule "$protocol" "$port" "$target" "${description:-"未提供描述"}"
+        echo -ne "${BOLD}按回车键返回...${NC}"; read
+    fi
+}
+
+# 删除规则菜单
+delete_rule_menu() {
+    list_rules
+    if [ $? -ne 0 ]; then  # 如果没有规则
+        sleep 2
+        return
+    fi
+    
+    echo -ne "${BOLD}输入要删除的规则ID: ${NC}"
+    read rule_id
+    
+    # 确认删除
+    if grep -q "# 规则ID: $rule_id" "$CONFIG_FILE"; then
+        echo -e "${RED}警告：此操作不可恢复！${NC}"
+        echo -ne "${BOLD}确认删除规则 $rule_id? [y/N]: ${NC}"
+        read confirm
+        if [[ "$confirm" =~ ^[Yy]$ ]]; then
+            delete_rule "$rule_id"
+        fi
+    else
+        echo -e "${RED}错误：找不到规则 $rule_id${NC}"
+        sleep 1
+    fi
+}
+
+# 列出规则
+list_rules() {
+    show_header
+    echo -e "${CYAN}══════ 当前端口转发规则 ══════${NC}"
+    
+    if [ ! -f "$CONFIG_FILE" ] || [ ! -s "$CONFIG_FILE" ]; then
+        echo -e "${YELLOW}暂无配置规则${NC}"
         return 1
     fi
     
-    # 验证目标格式
-    if ! [[ $target =~ ^([a-zA-Z0-9.-]+|$$[a-fA-F0-9:]+$$):[0-9]+$ ]]; then
-        echo -e "${RED}错误: 目标格式无效，请使用<地址/域名>:<端口>${NC}"
-        return 1
-    fi
+    # 显示规则表格
+    echo -e "${BOLD}ID       端口      协议      目标地址           描述${NC}"
+    echo -e "${YELLOW}────────────────────────────────────────────────────────${NC}"
     
-    # 验证协议
-    case $protocol in
-        tcp|udp|tcpudp) ;;
-        *) 
-            echo -e "${RED}错误: 协议必须为 tcp, udp 或 tcpudp${NC}"
-            return 1
-            ;;
-    esac
+    grep -A5 "# 规则ID:" "$CONFIG_FILE" | awk -v green="$GREEN" -v yellow="$YELLOW" -v nc="$NC" '
+        /^# 规则ID: / {
+            id = $3
+            $1=$2=$3=""
+            desc = substr($0, index($0, $4))
+            next
+        }
+        /listen [0-9]+/ {
+            port = $2
+            proto = ""
+            if ($3 == "tcp;") proto = "TCP"
+            if ($3 == "udp;") proto = "UDP"
+            if (proto != "") {
+                getline
+                if ($1 == "proxy_pass") {
+                    target = $2
+                    sub(";", "", target)
+                    printf "%-9s %-9s %-9s %-19s %s\n", yellow id nc, green port nc, green proto nc, green target nc, yellow desc nc
+                }
+            }
+        }
+    '
     
+    echo -e "${YELLOW}────────────────────────────────────────────────────────${NC}"
     return 0
 }
 
-# 端口占用检查
-check_port_availability() {
-    local port=$1
-    
-    # 检查Nginx是否已监听该端口
-    if sudo ss -tuln | grep -q ":$port\b"; then
-        echo -e "${YELLOW}警告: 端口 $port 已被其他服务使用${NC}"
-        read -p "是否继续添加规则? (y/N): " choice
-        [[ $choice =~ ^[Yy]$ ]] || return 1
-    fi
-    
-    # 检查规则是否已存在
-    if grep -q "server .*:$port;" "$CONFIG_FILE"; then
-        echo -e "${RED}错误: 端口 $port 已有转发规则${NC}"
-        return 1
-    fi
-    
-    return 0
-}
-
-# 添加转发规则
+# 添加规则函数
 add_rule() {
     local protocol=$1
     local listen_port=$2
     local target=$3
-    local rule_template=""
+    local description=$4
+    local rule_id=$(date +%s)
     
-    # 创建备份
+    # 创建规则
     backup_config
     
-    # 生成规则
-    case $protocol in
-        tcp)
-            rule_template="server { listen $listen_port; proxy_pass $target; }"
-            ;;
-        udp)
-            rule_template="server { listen $listen_port udp; proxy_pass $target; }"
-            ;;
-        tcpudp)
-            rule_template="server { listen $listen_port; listen $listen_port udp; proxy_pass $target; }"
-            ;;
-    esac
+    echo -e "\n# 规则ID: $rule_id - $description" >> "$CONFIG_FILE"
+    echo "server {" >> "$CONFIG_FILE"
     
-    # 添加到配置
-    echo -e "${BLUE}添加规则: ${protocol} ${listen_port} → ${target}${NC}"
-    echo -e "# 规则ID: ${TIMESTAMP}-${listen_port}\n${rule_template}" | sudo tee -a "$CONFIG_FILE" >/dev/null
-    
-    # 重启Nginx
-    if restart_nginx; then
-        echo -e "${GREEN}✓ 规则添加成功${NC}"
-        return 0
+    if [[ "$protocol" == "tcpudp" ]]; then
+        echo "    listen $listen_port tcp;" >> "$CONFIG_FILE"
+        echo "    proxy_pass $target;" >> "$CONFIG_FILE"
+        echo "}" >> "$CONFIG_FILE"
+        
+        echo -e "\n# 规则ID: $rule_id - $description" >> "$CONFIG_FILE"
+        echo "server {" >> "$CONFIG_FILE"
+        echo "    listen $listen_port udp;" >> "$CONFIG_FILE"
+        echo "    proxy_pass $target;" >> "$CONFIG_FILE"
     else
-        return 1
+        echo "    listen $listen_port $protocol;" >> "$CONFIG_FILE"
+        echo "    proxy_pass $target;" >> "$CONFIG_FILE"
     fi
+    
+    echo "}" >> "$CONFIG_FILE"
+    
+    echo -e "${GREEN}✅ 规则已成功添加！${NC}"
+    reload_nginx
 }
 
-# 删除转发规则
+# 删除规则
 delete_rule() {
-    local port=$1
+    local rule_id=$1
     
-    # 检查规则是否存在
-    if ! grep -q "listen $port;" "$CONFIG_FILE"; then
-        echo -e "${RED}错误: 未找到端口 $port 的规则${NC}"
-        return 1
-    fi
-    
-    # 创建备份
-    backup_config
-    
-    # 查找规则ID
-    local rule_id=$(grep -B1 "listen $port;" "$CONFIG_FILE" | grep "# 规则ID:" | awk '{print $3}')
-    
-    if [ -z "$rule_id" ]; then
-        echo -e "${YELLOW}警告: 未找到规则ID，执行全端口匹配删除${NC}"
-        rule_id=$port
-    fi
-    
-    # 删除规则
-    echo -e "${BLUE}删除规则: $port${NC}"
-    sudo sed -i "/# 规则ID: ${rule_id}/,/^}/d" "$CONFIG_FILE"
-    
-    # 重启Nginx
-    if restart_nginx; then
-        echo -e "${GREEN}✓ 规则删除成功${NC}"
-        return 0
+    if grep -q "# 规则ID: $rule_id" "$CONFIG_FILE"; then
+        # 创建备份
+        backup_config
+        
+        # 删除规则
+        local temp_file=$(mktemp)
+        sed -e "/# 规则ID: $rule_id/,/^}/d" "$CONFIG_FILE" > "$temp_file"
+        mv "$temp_file" "$CONFIG_FILE"
+        
+        echo -e "${GREEN}✅ 规则 $rule_id 已删除${NC}"
+        reload_nginx
     else
+        echo -e "${RED}错误: 找不到规则 $rule_id${NC}"
         return 1
     fi
 }
 
-# 显示规则列表
-list_rules() {
-    echo -e "${GREEN}当前转发规则列表:${NC}"
-    
-    # 提取并格式化规则
-    awk '
-        /# 规则ID:/ {
-            gsub(/# 规则ID: /, "")
-            id=$0
-            next
-        }
-        /server {/ {
-            in_block=1
-            next
-        }
-        in_block && /listen [0-9]+/ {
-            port=$2
-            protocol="tcp"
-            if ($0 ~ /udp/) protocol="udp"
-            if (match($0, /listen [0-9]+ udp; listen [0-9]+;/)) protocol="tcpudp"
-            next
-        }
-        in_block && /proxy_pass/ {
-            target=$2
-            sub(/;$/, "", target)
-            next
-        }
-        in_block && /}/ {
-            printf "%-8s %-6s %-12s %s\n", id, port, protocol, target
-            in_block=0
-        }
-    ' "$CONFIG_FILE" | column -t
-    
-    # 空规则提示
-    if ! grep -q "server { listen" "$CONFIG_FILE"; then
-        echo -e "${YELLOW}暂无转发规则${NC}"
+# 备份配置
+backup_config() {
+    mkdir -p "$BACKUP_DIR"
+    local timestamp=$(date +%Y%m%d-%H%M%S)
+    cp "$CONFIG_FILE" "$BACKUP_DIR/stream_proxy_$timestamp.conf"
+    echo -e "${CYAN}📦 已创建配置备份: $BACKUP_DIR/stream_proxy_$timestamp.conf${NC}"
+}
+
+# 启动Nginx
+start_nginx() {
+    if systemctl start nginx; then
+        echo -e "${GREEN}✅ Nginx已成功启动${NC}"
+    else
+        echo -e "${RED}❌ 无法启动Nginx${NC}"
     fi
+    sleep 1
 }
 
-# 显示帮助信息
-show_help() {
-    echo -e "${GREEN}Nginx Stream Manager (nsm) 使用帮助${NC}"
-    echo -e "${BLUE}用法:${NC}"
-    echo -e "  add [协议] [监听端口] [目标地址]  添加转发规则"
-    echo -e "  del [端口]                       删除转发规则"
-    echo -e "  list                             显示所有规则"
-    echo -e "  help                             显示本帮助信息"
-    echo -e "\n${BLUE}示例:${NC}"
-    echo -e "  ${YELLOW}添加规则:${NC} nsm add tcp 8080 example.com:80"
-    echo -e "  ${YELLOW}添加UDP规则:${NC} nsm add udp 10000 voip-server:5060"
-    echo -e "  ${YELLOW}添加双向规则:${NC} nsm add tcpudp 53 dns-server:53"
-    echo -e "  ${YELLOW}删除规则:${NC} nsm del 8080"
-    echo -e "  ${YELLOW}查看规则:${NC} nsm list"
+# 停止Nginx
+stop_nginx() {
+    if systemctl stop nginx; then
+        echo -e "${GREEN}✅ Nginx已停止${NC}"
+    else
+        echo -e "${RED}❌ 无法停止Nginx${NC}"
+    fi
+    sleep 1
 }
 
-# --- 主程序逻辑 ---
+# 重启Nginx
+restart_nginx() {
+    if systemctl restart nginx; then
+        echo -e "${GREEN}✅ Nginx已重启${NC}"
+    else
+        echo -e "${RED}❌ 无法重启Nginx${NC}"
+    fi
+    sleep 1
+}
 
-# 确保以root运行
-if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}错误: 此命令需要root权限 (请使用 sudo nsm)${NC}"
-    exit 1
-fi
-
-# 确保配置文件存在
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo -e "${RED}错误: 配置文件不存在 - $CONFIG_FILE${NC}"
-    echo -e "请先运行 ${YELLOW}sudo ./deploy.sh${NC} 安装程序"
-    exit 1
-fi
-
-# 解析命令
-case $1 in
-    add)
-        if [ $# -ne 4 ]; then
-            echo -e "${RED}错误: 参数不足，格式为 nsm add [协议] [监听端口] [目标地址]${NC}"
-            exit 1
-        fi
-        
-        if validate_rule "$2" "$3" "$4" && check_port_availability "$3"; then
-            add_rule "$2" "$3" "$4"
+# 重载Nginx配置
+reload_nginx() {
+    echo -e "${CYAN}🔄 重新加载Nginx配置...${NC}"
+    
+    if nginx -t &> /dev/null; then
+        if systemctl reload nginx &> /dev/null; then
+            echo -e "${GREEN}✅ 配置已重新加载${NC}"
         else
-            exit 1
+            echo -e "${RED}❌ 无法重新加载Nginx - 请手动重启${NC}"
         fi
-        ;;
-    
-    del|delete|remove)
-        if [ $# -ne 2 ]; then
-            echo -e "${RED}错误: 请指定要删除的端口号${NC}"
-            exit 1
-        fi
+    else
+        echo -e "${RED}❌ Nginx配置测试失败！${NC}"
+        echo -e "${YELLOW}使用 'nginx -t' 查看详细信息${NC}"
+        return 1
+    fi
+    return 0
+}
+
+# 检查配置
+check_nginx_config() {
+    echo -e "${CYAN}🔍 检查Nginx配置...${NC}"
+    nginx -t
+    echo -ne "${BOLD}按回车键返回...${NC}"; read
+}
+
+# 更新管理器
+update_manager() {
+    echo -e "${CYAN}🔄 检查更新...${NC}"
+    curl -fsSL -o /tmp/nsm-update \
+        https://raw.githubusercontent.com/pansir0290/nginx-stream-manager/main/manager.sh
         
-        if ! [[ $2 =~ ^[0-9]+$ ]]; then
-            echo -e "${RED}错误: 端口号必须是数字${NC}"
-            exit 1
-        fi
-        
-        delete_rule "$2"
-        ;;
-    
-    list|show|ls)
-        list_rules
-        ;;
-    
-    help|--help|-h)
-        show_help
-        ;;
-    
-    *)
-        if [ $# -eq 0 ]; then
-            echo -e "${YELLOW}提示: 使用 nsm help 查看可用命令${NC}"
-        else
-            echo -e "${RED}错误: 未知命令 '$1'${NC}"
-            echo -e "使用 ${YELLOW}nsm help${NC} 查看可用命令"
-        fi
-        exit 1
-        ;;
-esac
+    if diff /usr/local/bin/nsm-manager /tmp/nsm-update &> /dev/null; then
+        echo -e "${GREEN}✅ 已是最新版本${NC}"
+        rm /tmp/nsm-update
+    else
+        echo -e "${CYAN}发现新版本，正在更新...${NC}"
+        mv /tmp/nsm-update /usr/local/bin/nsm-manager
+        chmod +x /usr/local/bin/nsm-manager
+        echo -e "${GREEN}✅ 更新成功！${NC}"
+    fi
+    sleep 1
+}
+
+# 卸载确认
+uninstall_menu() {
+    show_header
+    echo -e "${RED}═════ 卸载确认 ═════${NC}"
+    echo -e "此操作将："
+    echo -e "1. 移除所有转发规则"
+    echo -
