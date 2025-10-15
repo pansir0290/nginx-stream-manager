@@ -539,7 +539,7 @@ main_menu_entry() {
     done
 }
 
-# 脚本启动
+# 脚本启动 (修复后的逻辑)
 if [ "$1" = "init_config_dir" ]; then
     check_root
     init_config_dir
@@ -550,6 +550,6 @@ elif [ "$1" = "install_components" ]; then
     install_components
     exit 0 # 成功执行后退出
 else
-    # 正常启动菜单
+    # 正常启动菜单入口
     main_menu_entry
 fi
