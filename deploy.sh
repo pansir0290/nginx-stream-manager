@@ -1,8 +1,6 @@
 #!/bin/bash
 # -----------------------------------------------------------------------------
 # Nginx Stream Manager (NSM) 部署脚本
-# 功能：自动检测OS、安装依赖、安装Nginx Stream模块、清理配置冲突、
-#      下载 manager.sh 并设置 nsm 命令别名。
 # -----------------------------------------------------------------------------
 
 set -e # 遇到任何错误立即退出
@@ -20,6 +18,7 @@ YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+# 日志函数定义 (已修复，包含 log_warning)
 log_info() {
     echo -e "${CYAN}[INFO]${NC} $1"
 }
@@ -30,6 +29,7 @@ log_success() {
 
 log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+    # 在错误发生时，可能需要更清晰的退出提示
 }
 
 log_warning() {
@@ -80,37 +80,39 @@ install_dependencies() {
     elif [ "$OS" = "centos" ] || [ "$OS" = "rhel" ] || [ "$OS" = "fedora" ]; then
         # CentOS/RHEL 常用命令（假设 Nginx 已启用 EPEL 或官方源）
         sudo yum install -y curl vim sudo nginx net-tools iproute2
-        # 注意：CentOS 的 Nginx 官方包通常默认包含 Stream 模块
-        
+        # 或使用 dnf
+        # sudo dnf install -y curl vim sudo nginx net-tools iproute2
     else
         log_error "不支持的操作系统 ($OS)。请手动安装 Nginx, curl, vim, net-tools，并确保 Stream 模块已启用。"
         exit 1
     fi
 }
 
-# 核心自愈功能：清除配置冲突
+# 核心自愈功能：清除配置冲突并重载 Nginx
 cleanup_nginx_config() {
     log_info "正在清理 Nginx 主配置文件中的重复或错误的 load_module 指令..."
     
-    # 查找并删除所有包含 "load_module" 且指向 "stream" 模块的行。
-    # Stream 模块现在由包管理器自动加载，手动添加会导致冲突。
-    # 使用 # 作为 sed 分隔符，避免与路径中的 / 冲突。
+    local NEEDS_CLEANUP=0
+    # 查找所有包含 "load_module" 且指向 "stream" 模块的行
     if sudo grep -q "load_module .*ngx_stream.*\.so;" "$NGINX_CONF"; then
+        NEEDS_CLEANUP=1
+        
+        # 使用 sed 清理冲突的指令
         sudo sed -i '/load_module .*ngx_stream.*\.so;/d' "$NGINX_CONF"
         log_success "已从 $NGINX_CONF 清理掉冲突的 Stream 模块加载指令。"
-        
-        # 尝试重载 Nginx，如果成功则一切正常
-        log_info "尝试重载 Nginx 服务以应用配置清理..."
-        if sudo systemctl reload nginx 2>/dev/null; then
-            log_success "Nginx 服务重载成功。环境已就绪。"
-        else
-            log_error "Nginx 重载失败。请运行 'sudo nginx -t' 手动检查配置错误。"
-            return 1
-        fi
     else
-        log_info "未检测到冲突的 Stream 模块加载指令，跳过清理。"
+        log_info "未检测到冲突的 Stream 模 块 加 载 指 令 ， 跳 过 清 理 。"
     fi
-    return 0
+    
+    # 无论是否清理，都要尝试重载 Nginx，确保新安装的模块被加载
+    log_info "尝试重载 Nginx 服务以确保环境就绪..."
+    if sudo systemctl reload nginx 2>/dev/null; then
+        log_success "Nginx 服务重载成功。环境已就绪。"
+        return 0
+    else
+        log_error "Nginx 重载失败。请立即运行 'sudo nginx -t' 手动检查配置错误。部署脚本终止。"
+        return 1
+    fi
 }
 
 # 下载并安装 manager.sh
@@ -119,7 +121,7 @@ install_manager_script() {
     
     # 下载脚本到临时文件
     if ! sudo curl -fsSL "$REPO_RAW_URL/$MANAGER_SCRIPT" -o "$INSTALL_PATH.tmp"; then
-        log_error "下载 $MANAGER_SCRIPT 失败，请检查网络和仓库路径。"
+        log_error "下载 $MANAGER_SCRIPT 失败，请检查网络和仓库路径。脚本终止。"
         exit 1
     fi
 
@@ -133,10 +135,10 @@ install_manager_script() {
 setup_alias() {
     local ALIAS_CMD="alias nsm='sudo $INSTALL_PATH'"
     local PROFILE_FILES=(
-        "$HOME/.bashrc"
-        "$HOME/.zshrc"
         "/root/.bashrc"
         "/root/.zshrc"
+        "$HOME/.bashrc"
+        "$HOME/.zshrc"
     )
 
     log_info "正在设置 'nsm' 别名..."
@@ -153,7 +155,7 @@ setup_alias() {
     done
 
     if [ "$found" -eq 0 ]; then
-        log_warning "未能将别名添加到任何已知的 shell 配置文件中。"
+        log_warning "未能将别名添加到任何已知的 shell 配置文件中。请手动添加别名或直接运行 'sudo $INSTALL_PATH'"
     fi
 
     log_success "部署完成！请运行 'source ~/.bashrc' (或 ~/.zshrc) 后再运行 'nsm' 启动管理工具。"
