@@ -42,8 +42,9 @@ sudo curl -fsSL [https://raw.githubusercontent.com/pansir0290/nginx-stream-manag
 【重要】部署完成后，请执行此命令使 'nsm' 别名生效：
 
 Bash
-
+```
 source ~/.bashrc # 或 source /root/.bashrc
+```
 
 💡 手动安装依赖（如果一键部署失败）
 
@@ -52,16 +53,21 @@ source ~/.bashrc # 或 source /root/.bashrc
 对于 Debian/Ubuntu 系统:
 
 Bash
-
+```
 sudo apt update
 sudo apt install -y curl vim sudo nginx net-tools iproute2 libnginx-mod-stream
+```
+
 对于 CentOS/RHEL/Fedora 系统:
 
 Bash
-
+```
 sudo yum install -y curl vim sudo nginx net-tools iproute2
+```
 # 或使用 dnf
-# sudo dnf install -y curl vim sudo nginx net-tools iproute2
+```
+sudo dnf install -y curl vim sudo nginx net-tools iproute2
+```
 
 ### 3. 使用方法和故障排除
 
@@ -125,20 +131,24 @@ markdown
 **1. 清除 Nginx 配置:**
 
 bash
+```
 sudo rm -rf /etc/nginx/conf.d/nsm
+```
 2. 移除管理脚本:
 
 Bash
-
+```
 sudo rm -f /usr/local/bin/nsm
+```
 3. 移除别名 (可选):
 手动编辑您的 .bashrc 或 .zshrc 文件，删除 alias nsm='...' 这一行。
 
 4. 重载 Nginx:
 
 Bash
-
+```
 sudo systemctl reload nginx
+```
 📜 许可协议
 本项目遵循 MIT 协议。
 
