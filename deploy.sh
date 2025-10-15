@@ -5,7 +5,7 @@
 #      下载 manager.sh 并设置 nsm 命令别名。
 # -----------------------------------------------------------------------------
 
-set -e # 遇到任何错误立即退出（注意：在 cleanup_nginx_config 内部使用 || true 进行了局部容错）
+set -e # 遇到任何错误立即退出
 
 # 配置参数
 REPO_RAW_URL="https://raw.githubusercontent.com/pansir0290/nginx-stream-manager/main"
@@ -67,27 +67,24 @@ install_dependencies() {
     if [ "$OS" = "debian" ] || [ "$OS" = "ubuntu" ]; then
         sudo apt update
         
-        # 🎯 核心清理步骤：解决已知的 Nginx 包冲突和旧版本 ABI 问题
+        # 🎯 核心清理步骤：解决已知的 Nginx 包冲突和旧版本 ABI/官方源冲突
         log_info "正在检查并强制清理所有 Nginx 相关包以解决依赖和官方源冲突..."
         
-        # 1. 强制移除所有与 Nginx 冲突的包，以打破循环冲突
-        # 使用 --purge 确保彻底清除配置文件
+        # 目标：强制移除所有与 Nginx 冲突的包，以打破循环冲突
         sudo apt purge -y nginx* nginx-full nginx-common libnginx-mod-stream &>/dev/null || true
         
-        # 2. 强制解决依赖问题并清理残留
+        # 强制解决依赖问题并清理残留
         sudo apt -f install -y &>/dev/null || true
         sudo apt autoremove -y &>/dev/null || true
         
         # 重新运行更新，确保包信息最新
         sudo apt update
         
-        # 3. 重新安装 Nginx 核心，让系统选择最兼容的版本
+        # 安装基础依赖、Nginx、以及端口检测工具
         sudo apt install -y curl vim sudo nginx net-tools iproute2
 
         # 核心修复: 确保安装 libnginx-mod-stream 包，包含 Stream SSL 模块
         log_info "正在检查并安装 Nginx Stream 模 块 ..."
-        
-        # 注意：对于官方 Nginx 源，Stream 模块可能内置。我们仍尝试安装 Debian 官方模块包。
         if ! dpkg -l | grep -q "libnginx-mod-stream"; then
             # 使用 || true 确保即使 Nginx 官方源导致此包安装失败，脚本也继续运行
             sudo apt install -y libnginx-mod-stream || true
@@ -111,7 +108,7 @@ install_dependencies() {
     fi
 }
 
-# 核心自愈功能：清除配置冲突并启动/重载 Nginx
+# 核心自愈功能：清除配置冲突并重载 Nginx
 cleanup_nginx_config() {
     log_info "正在清理 Nginx 主配置文件中的重复或错误的 load_module 指令..."
     
@@ -127,10 +124,10 @@ cleanup_nginx_config() {
         log_info "未检测到冲突的 Stream 模 块 加 载 指 令 ， 跳 过 清 理 。"
     fi
     
-    # --- 核心服务启动逻辑优化 (容错处理) ---
+    # --- 核心服务启动逻辑优化 ---
     log_info "尝试启用并启动 Nginx 服务以确保环境就绪..."
     
-    # 1. 先进行配置测试。
+    # 1. 先进行配置测试。如果配置都通过了，说明环境基本没问题。
     if sudo nginx -t 2>/dev/null; then
         log_success "Nginx 配置测试成功。"
         
@@ -140,9 +137,9 @@ cleanup_nginx_config() {
             log_success "Nginx 服务启动/重启成功。环境已就绪。"
             return 0 # 成功，继续执行后续脚本
         else
-            # 3. 如果重启失败，但配置测试成功，发出警告并允许继续部署 nsm。
+            # 3. 如果重启失败，但配置测试成功，发出警告并允许继续。
             log_warning "Nginx 服务重启失败。配置已清理完毕，但请手动检查服务状态：'sudo systemctl status nginx'。继续部署 nsm..."
-            return 0 # **关键容错：配置正确时，允许脚本继续安装 nsm**
+            return 0 # **允许继续安装 nsm**
         fi
     else
         # 配置测试失败，说明有配置语法错误，必须终止。
@@ -169,7 +166,8 @@ install_manager_script() {
 
 # 设置 nsm 别名
 setup_alias() {
-    local ALIAS_CMD="alias nsm='sudo $INSTALL_PATH'"
+    # 修复：使用 -E 保留终端环境变量，解决颜色转义码显示问题
+    local ALIAS_CMD="alias nsm='sudo -E $INSTALL_PATH'" 
     local PROFILE_FILES=(
         "/root/.bashrc"
         "/root/.zshrc"
@@ -191,7 +189,7 @@ setup_alias() {
     done
 
     if [ "$found" -eq 0 ]; then
-        log_warning "未能将别名添加到任何已知的 shell 配置文件中。请手动添加别名或直接运行 'sudo $INSTALL_PATH'"
+        log_warning "未能将别名添加到任何已知的 shell 配置文件中。请手动添加别名或直接运行 'sudo -E $INSTALL_PATH'"
     fi
 
     log_success "部署完成！请运行 'source ~/.bashrc' (或 ~/.zshrc) 后再运行 'nsm' 启动管理工具。"
