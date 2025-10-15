@@ -33,7 +33,7 @@ log() {
     local level=$1
     local message=$2
     local color
-    
+
     case $level in
         "SUCCESS") color=$GREEN ;;
         "ERROR") color=$RED ;;
@@ -41,7 +41,7 @@ log() {
         "INFO") color=$CYAN ;;
         *) color=$NC ;;
     esac
-    
+
     echo -e "$(date +'%Y-%m-%d %H:%M:%S') [$level] $message" >> "$LOG_FILE"
     echo -e "${color}[${level}]${NC} $message"
 }
@@ -96,13 +96,13 @@ install_components() {
         log "WARNING" "Nginx未安装。请先手动安装Nginx后再运行此选项。"
         return
     fi
-    
+
     # 确保 stream 模块加载 (尝试自动修复 ssl_preread 问题)
     if ! grep -q "load_module .*ngx_stream_ssl_module\.so;" "$NGINX_CONF"; then
         log "INFO" "尝试自动加载 ngx_stream_ssl_module.so..."
         # 尝试在 worker_processes 后添加模块加载，使用通用和常见路径
         MODULE_LINE="load_module /usr/lib/nginx/modules/ngx_stream_ssl_module.so;"
-        
+
         if grep -q "worker_processes" "$NGINX_CONF"; then
             sed -i "/worker_processes/a\ ${MODULE_LINE}" "$NGINX_CONF"
             log "SUCCESS" "Stream SSL 模块加载指令已添加到 $NGINX_CONF。"
@@ -119,16 +119,16 @@ configure_selinux() {
     if command -v getenforce &> /dev/null; then
         if [ "$(getenforce)" != "Disabled" ]; then
             log "INFO" "配置SELinux..."
-            
+
             # 临时禁用
             setenforce 0
-            
+
             # 永久禁用
             if [ -f /etc/selinux/config ]; then
                 sed -i 's/^SELINUX=enforcing$/SELINUX=disabled/' /etc/selinux/config
                 sed -i 's/^SELINUX=permissive$/SELINUX=disabled/' /etc/selinux/config
             fi
-            
+
             log "SUCCESS" "SELinux已禁用 (警告：完全禁用SELinux会降低系统安全性，并需要重启后永久生效)"
         else
             log "INFO" "SELinux已处于禁用状态"
@@ -144,18 +144,18 @@ init_config_dir() {
         log "INFO" "创建配置目录: $CONFIG_DIR"
         mkdir -p "$CONFIG_DIR"
     fi
-    
+
     if [ ! -d "$BACKUP_DIR" ]; then
         log "INFO" "创建备份目录: $BACKUP_DIR"
         mkdir -p "$BACKUP_DIR"
     fi
-    
+
     # 创建主配置文件（如果不存在或为空）
     if [ ! -f "$CONFIG_FILE" ] || [ ! -s "$CONFIG_FILE" ]; then
         log "INFO" "创建/清空规则文件: $CONFIG_FILE"
         echo "# Auto-generated Nginx Stream Proxy rules by NSM. Do not modify manually." > "$CONFIG_FILE"
     fi
-    
+
     # 确保nginx主配置文件中存在 stream {} 块
     if ! grep -q "stream {" "$NGINX_CONF"; then
         log "WARNING" "Nginx主配置中缺少 stream {} 块，尝试添加..."
@@ -171,10 +171,10 @@ stream {\
     # 确保 stream {} 块中包含我们的规则文件
     if ! grep -q "include $CONFIG_FILE;" "$NGINX_CONF"; then
         log "INFO" "添加规则文件 include 到 $NGINX_CONF 的 stream {} 块中。"
-        
+
         # 插入配置到 stream { 的下一行
         sed -i "/stream {/a\    include $CONFIG_FILE;" "$NGINX_CONF"
-        
+
         log "SUCCESS" "include $CONFIG_FILE; 已添加到 stream {} 块中。"
     fi
 }
@@ -202,7 +202,7 @@ restart_nginx() {
         [ "$silent" != "y" ] && main_menu
         return 1
     fi
-    
+
     log "INFO" "配置测试成功，正在重载/重启 Nginx..."
     if command -v systemctl &> /dev/null; then
         sudo systemctl reload "$NGINX_SERVICE" || sudo systemctl restart "$NGINX_SERVICE"
@@ -225,9 +225,9 @@ restart_nginx() {
 add_rule() {
     show_banner
     echo -e "${BLUE}» 添加端口转发规则${NC}\n"
-    
+
     # ... (端口/IP/协议选择逻辑保持不变，确保 netstat/iproute2 已安装)
-    
+
     # 检查 netstat/ss (用于端口占用检查)
     if ! command -v netstat &> /dev/null && ! command -v ss &> /dev/null; then
         log "WARNING" "未检测到 netstat 或 ss 命令。端口占用检查将跳过。"
@@ -236,29 +236,29 @@ add_rule() {
     # 获取本地端口
     while true; do
         read -p "输入本地监听端口: " local_port
-        
+
         # 验证端口是否数字
         if ! [[ "$local_port" =~ ^[0-9]+$ ]] || [ "$local_port" -lt 1 ] || [ "$local_port" -gt 65535 ]; then
             log "ERROR" "无效端口号：端口必须是1-65535之间的整数"
             continue
         fi
-        
+
         # 检查端口是否已被使用
         if (command -v netstat &> /dev/null && netstat -tuln | grep -q ":$local_port ") || \
            (command -v ss &> /dev/null && ss -tuln | grep -q ":$local_port "); then
             log "ERROR" "端口 $local_port 已被系统占用，请选择其他端口"
             continue
         fi
-        
+
         # 检查端口是否已在nginx配置中使用
         if grep -q "listen $local_port;" "$CONFIG_FILE"; then
             log "ERROR" "端口 $local_port 已在Nginx配置中使用"
             continue
         fi
-        
+
         break
     done
-    
+
     # 获取目标服务器
     while true; do
         read -p "输入目标服务器IP: " remote_ip
@@ -273,7 +273,7 @@ add_rule() {
         fi
         break
     done
-    
+
     # 获取目标端口
     while true; do
         read -p "输入目标服务器端口: " remote_port
@@ -283,7 +283,7 @@ add_rule() {
         fi
         break
     done
-    
+
     # 协议选择
     while true; do
         echo -e "\n选择协议类型:"
@@ -291,7 +291,7 @@ add_rule() {
         echo -e "  ${GREEN}2${NC}) 仅TCP"
         echo -e "  ${GREEN}3${NC}) 仅UDP (需要Nginx支持UDP模块)"
         read -p "请选择 [1-3]: " proto_choice
-        
+
         case $proto_choice in
             1)
                 protocols="tcp/udp"
@@ -312,7 +312,7 @@ add_rule() {
         esac
         break
     done
-    
+
     # SSL 预读选择 (新逻辑)
     ssl_preread_line=""
     proxy_ssl_name_line=""
@@ -338,15 +338,15 @@ ${proxy_ssl_name_line}
 }
 EOF
 )
-    
+
     # 备份当前配置
     backup_config
-    
+
     # 在配置文件末尾追加新规则
     echo -e "$new_rule" >> "$CONFIG_FILE"
-    
+
     log "SUCCESS" "规则已添加：端口 $local_port ($protocols) -> $remote_ip:$remote_port"
-    
+
     # 提示并重载 Nginx
     read -p "是否立即应用配置并重载 Nginx? (y/n): " apply_now
     if [[ "$apply_now" =~ ^[Yy]$ ]]; then
@@ -363,14 +363,14 @@ EOF
 view_rules() {
     show_banner
     echo -e "${BLUE}» 当前 Stream 转发规则列表 (${CONFIG_FILE})${NC}\n"
-    
+
     if [ ! -f "$CONFIG_FILE" ] || [ ! -s "$CONFIG_FILE" ] || ! grep -q "server {" "$CONFIG_FILE"; then
         log "INFO" "没有配置任何转发规则。"
         read -n 1 -s -r -p "按任意键返回主菜单..."
         main_menu
         return
     fi
-    
+
     grep -A 5 "server {" "$CONFIG_FILE" | awk '
         /server {/ {print "\n• 规则 " NR ":"}
         /listen/ {
@@ -384,7 +384,7 @@ view_rules() {
         /ssl_preread/ {print "  SSL 预读: 启用"}
     '
     echo -e ""
-    
+
     read -n 1 -s -r -p "按任意键返回主菜单..."
     main_menu
 }
@@ -394,7 +394,7 @@ view_rules() {
 delete_rule() {
     show_banner
     echo -e "${BLUE}» 删除端口转发规则${NC}\n"
-    
+
     # ... (原有的查看规则和获取序号的逻辑)
     if ! grep -q "server {" "$CONFIG_FILE"; then
         log "INFO" "没有配置任何转发规则"
@@ -402,54 +402,54 @@ delete_rule() {
         main_menu
         return
     fi
-    
+
     echo -e "${YELLOW}当前转发规则列表:${NC}"
     server_lines=($(grep -n "server {" "$CONFIG_FILE" | cut -d: -f1))
-    
+
     # 重新生成列表以显示序号和内容
     count=0
     for start_line in "${server_lines[@]}"; do
         count=$((count + 1))
-        
+
         # 查找结束行
         end_line=$(sed -n "$start_line,\$p" "$CONFIG_FILE" | grep -m 1 -n "}" | head -1 | cut -d: -f1)
         end_line=$((start_line + end_line - 1))
-        
+
         # 提取端口信息用于显示
         listen_info=$(sed -n "${start_line},${end_line}p" "$CONFIG_FILE" | grep 'listen' | head -1 | awk '{print $2}' | tr -d ';')
         target_info=$(sed -n "${start_line},${end_line}p" "$CONFIG_FILE" | grep 'proxy_pass' | head -1 | awk '{print $2}' | tr -d ';')
-        
+
         echo -e "• 规则 ${GREEN}$count${NC}：监听端口 $listen_info -> 目标 $target_info"
     done
     echo -e ""
-    
+
     # 获取要删除的规则
     while true; do
         read -p "输入要删除的规则序号 (输入c取消): " rule_num
-        
+
         if [ "$rule_num" = "c" ]; then main_menu; return; fi
         if ! [[ "$rule_num" =~ ^[0-9]+$ ]] || [ "$rule_num" -lt 1 ] || [ "$rule_num" -gt "$count" ]; then
             log "ERROR" "请输入有效的规则序号 [1-$count]"
             continue
         fi
-        
+
         start_line=${server_lines[$((rule_num-1))]}
-        
+
         # 查找结束行
         end_line=$(sed -n "$start_line,\$p" "$CONFIG_FILE" | grep -m 1 -n "}" | head -1 | cut -d: -f1)
         end_line=$((start_line + end_line - 1))
-        
+
         break
     done
-    
+
     # 备份当前配置
     backup_config
-    
+
     # 【修复：执行删除操作】
     sed -i "${start_line},${end_line}d" "$CONFIG_FILE"
-    
+
     log "SUCCESS" "规则 $rule_num 已删除 (行 $start_line - $end_line)"
-    
+
     # 提示并重载 Nginx
     read -p "是否立即应用配置并重载 Nginx? (y/n): " apply_now
     if [[ "$apply_now" =~ ^[Yy]$ ]]; then
@@ -465,7 +465,7 @@ system_check() {
     show_banner
     echo -e "${BLUE}» 系统环境检查${NC}\n"
     detect_os # 显示操作系统信息
-    
+
     echo -e "${YELLOW}--- Nginx 状态 ---${NC}"
     if command -v nginx &> /dev/null; then
         echo -e "Nginx 命令: ${GREEN}存在${NC} ($(command -v nginx))"
@@ -474,10 +474,10 @@ system_check() {
     fi
 
     echo -e "Nginx 服务: $(systemctl is-active nginx 2>/dev/null)"
-    
+
     echo -e "\n${YELLOW}--- 配置文件状态 ---${NC}"
     echo -e "规则文件 ($CONFIG_FILE): $([ -f "$CONFIG_FILE" ] && echo "${GREEN}存在${NC}" || echo "${RED}缺失${NC}")"
-    
+
     # 检查主配置 include 状态
     if grep -q "include $CONFIG_FILE;" "$NGINX_CONF"; then
         include_status="${GREEN}已包含${NC}"
@@ -485,7 +485,7 @@ system_check() {
         include_status="${RED}未包含${NC}"
     fi
     echo -e "主配置 Include 状态: $include_status"
-    
+
     # 检查 Stream SSL 模块加载状态
     if grep -q "load_module .*ngx_stream_ssl_module\.so;" "$NGINX_CONF"; then
         ssl_module_status="${GREEN}已加载${NC}"
@@ -493,14 +493,14 @@ system_check() {
         ssl_module_status="${RED}未加载 (可能导致 ssl_preread 失败)${NC}"
     fi
     echo -e "Stream SSL 模块: $ssl_module_status"
-    
+
     echo -e "\n${YELLOW}--- SELinux 状态 ---${NC}"
     if command -v getenforce &> /dev/null; then
         echo "当前状态: $(getenforce)"
     else
         echo "未检测到 SELinux"
     fi
-    
+
     read -n 1 -s -r -p "\n按任意键返回主菜单..."
     main_menu
 }
@@ -519,15 +519,43 @@ show_banner() {
     echo -e " ██║ ╚████║███████║██║ ╚═╝ ██║███████╗ ███████║  ██║  ██║  ██║███████╗██║  ██║"
     echo -e " ╚═╝  ╚═══╝╚══════╝╚═╝    ╚═╝╚══════╝ ╚══════╝  ╚═╝  ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝"
     echo -e "                                                                               "
-    echo -e "              Nginx Stream 端口转发管理工具 v1.0.1 (修复版)                "
+    echo -e "            Nginx Stream 端口转发管理工具 v1.0.1 (修复版)                 "
     echo -e "                                                                               "
     echo -e "===============================================================================${NC}"
     echo -e ""
 }
 
+# -----------------------------------------------------------------------------
+# 核心修复：添加 main_menu 函数定义，确保它在启动逻辑之前
+# -----------------------------------------------------------------------------
+main_menu() {
+    clear
+    show_banner
+    echo -e "--------------------------------------------------------------------------------"
+    echo -e "${YELLOW}当前 NSM 配置：${NC}"
+    echo -e "  - 规则文件路径: ${GREEN}$CONFIG_FILE${NC}"
+    echo -e "--------------------------------------------------------------------------------"
+    echo -e "${BLUE}请选择要执行的操作：${NC}"
+    echo -e "${GREEN} 1) 添加或修改代理规则 (Add/Modify Rule)${NC}"
+    echo -e "${GREEN} 2) 删除现有代理规则 (Delete Rule)${NC}"
+    echo -e "${GREEN} 3) 重启 Nginx (Restart Nginx)${NC}"
+    echo -e "${GREEN} 4) 系统状态检查 (System Check)${NC}"
+    echo -e "${RED} 0) 退出 NSM (Exit)${NC}"
+    echo -e "--------------------------------------------------------------------------------"
+    read -p "请输入选项 [0-4]: " menu_choice
+
+    case "$menu_choice" in
+        1) add_rule ;;
+        2) delete_rule ;;
+        3) restart_nginx ;;
+        4) system_check ;;
+        0) echo -e "${YELLOW}退出 Nginx Stream Manager...${NC}"; exit 0 ;;
+        *) echo -e "${RED}无效选项，请重新输入!${NC}"; sleep 1 ;;
+    esac
+}
 
 # -----------------------------------------------------------------------------
-# 脚本启动 (重构后的安全启动逻辑)
+# 脚本启动 (重构后的安全启动逻辑 - 文件最底部)
 # -----------------------------------------------------------------------------
 
 # 如果提供了参数，则执行参数指定的函数并退出
