@@ -115,14 +115,14 @@ sudo netstat -tuln | grep <端口号>
 
 ### 4. 卸载指南和许可协议
 
-```markdown
+markdown
 ## 🗑️ 卸载指南
 
 如果您希望彻底移除 Nginx Stream Manager (NSM)，请执行以下步骤：
 
 **1. 清除 Nginx 配置:**
 
-```bash
+bash
 sudo rm -rf /etc/nginx/conf.d/nsm
 2. 移除管理脚本:
 
