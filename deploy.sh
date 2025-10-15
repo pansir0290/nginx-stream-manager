@@ -250,47 +250,9 @@ EOF
 }
 
 # --- 执行主函数 ---
-case "$1" in
-    uninstall|remove|--uninstall)
-        uninstall
-        ;;
-    *)
-        deploy
-        ;;
-esac
-
-# 卸载函数 (如果部署成功不需要使用)
-uninstall() {
-    echo -e "\n${YELLOW}--- 卸载Nginx Stream Manager ---${NC}"
-    
-    # 移除管理脚本
-    if [ -f "$MANAGER_PATH" ]; then
-        sudo rm -f "$MANAGER_PATH"
-        echo -e "${GREEN}已移除管理脚本${NC}"
-    fi
-    
-    # 清理bash别名
-    sed -i '/alias nsm=/d' ~/.bashrc
-    
-    # 恢复原始配置
-    if [ -d "$BACKUP_DIR" ]; then
-        local latest_backup=$(ls -t "$BACKUP_DIR" | grep 'nginx.conf.bak' | head -1)
-        
-        if [ -n "$latest_backup" ]; then
-            echo -e "${YELLOW}恢复Nginx主配置${NC}"
-            sudo cp -f "$BACKUP_DIR/$latest_backup" "$MAIN_CONF"
-        fi
-    else
-        # 尝试自动清理
-        sudo sed -i '/# Nginx Stream Manager/,/}/d' "$MAIN_CONF"
-        sudo sed -i '/load_module .*ngx_stream_ssl_module\.so;/d' "$MAIN_CONF"
-    fi
-    
-    # 移除配置文件
-    if [ -f "$CONFIG_FILE" ]; then
-        sudo rm -f "$CONFIG_FILE"
-    fi
-    
-    restart_nginx_service
-    echo -e "${GREEN}卸载完成!${NC}"
-}
+if [[ "$1" == "uninstall" || "$1" == "--uninstall" ]]; then
+    # 这里是卸载函数
+    echo "卸载功能暂未实现"
+else
+    deploy
+fi
