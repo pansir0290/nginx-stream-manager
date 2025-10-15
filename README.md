@@ -63,12 +63,12 @@ sudo yum install -y curl vim sudo nginx net-tools iproute2
 
 ### 3. 使用方法和故障排除
 
-```markdown
+markdown
 ## 🖥️ 使用方法
 
 部署成功后，只需在终端输入 `nsm` 即可启动管理菜单。
 
-```bash
+bash
 nsm
 主菜单选项说明
 
