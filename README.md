@@ -1,6 +1,30 @@
-Markdown
+# Nginx Stream Manager (NSM)
 
-### 🛠️ 一键部署 (推荐)
+![Version](https://img.shields.io/badge/Version-1.0.1%20(Stable)-blue)
+![License](https://img.shields.io/github/license/pansir0290/nginx-stream-manager?color=orange)
+![OS Compatibility](https://img.shields.io/badge/OS-Debian%20%7C%20Ubuntu%20%7C%20CentOS-green)
+
+> **NSM 是一款高效、可靠的 Shell 脚本工具，专注于简化 Linux 环境下 Nginx Stream 模块（四层代理）的配置与管理。实现高性能的 TCP/UDP 端口转发和基于 SNI 的智能代理。**
+
+## 🚀 核心功能
+
+* **端口转发:** 轻松设置 TCP 和 UDP 端口转发到目标 IP 和端口。
+* **SSL 预读 (SNI 路由):** 利用 Nginx 的 `ssl_preread` 功能，根据客户端请求的域名（ SNI ）自动将流量路由到不同的后端服务器，完美解决单端口多服务问题。
+* **配置管理:** 自动添加、修改和删除 Stream 代理规则。
+* **服务控制:** 一键重启/重载 Nginx 服务以应用配置。
+* **环境自检:** 部署脚本包含智能检测，自动安装 Stream 模块并清理配置冲突。
+
+## 📋 兼容性要求
+
+本脚本要求您的系统满足以下条件：
+
+* **操作系统:** 兼容主流 Linux 发行版 (Debian 10+, Ubuntu 18.04+, CentOS 7+)。
+* **权限:** 必须以 `root` 用户或具有 `sudo` 权限的用户运行。
+* **核心组件:** `curl`, `nginx`, `sudo` 等（已包含在部署脚本中）。
+
+## 🛠️ 一键部署 (推荐)
+
+我们推荐使用一键部署脚本，它将自动安装所有依赖（包括 Nginx Stream 模块）、下载管理脚本并设置 `nsm` 命令。**您无需担心 Stream 模块缺失或配置冲突问题。**
 
 **步骤 1: 部署并安装**
 运行以下命令，完成所有环境配置和安装：
@@ -48,6 +72,7 @@ nsm
 4	系统状态检查	检查 Nginx 服务状态、配置包含状态、 Stream SSL 模块加载状态等。
 0	退出 NSM	退出管理工具。
 关键特性说明： SSL 预读
+
 当您在添加规则时选择开启 SSL 预读（ ssl_preread ）时， NSM 会在 Stream 模块中添加配置，让 Nginx 能够读取 SSL 握手时的 SNI 域名信息，从而实现：
 
 单端口多 HTTPS 服务: 例如，将所有 443 端口的流量根据域名路由到不同的内网 Web 服务器。
@@ -56,7 +81,6 @@ nsm
 
 ⭐ 注意事项与故障排查
 1. Nginx 配置测试失败
-
 如果 Nginx 服务重载失败，或您运行 nsm 后提示配置错误，请执行以下命令进行详细诊断：
 
 Bash
@@ -67,14 +91,12 @@ Stream 模块问题： 如果提示找不到 Stream 模块 (dlopen() ... failed)
 语法错误： 如果提示配置语法错误，请检查您的规则文件 /etc/nginx/conf.d/nsm/nsm-stream.conf ，确保没有多余或缺失的花括号 {} 或分号 ;。
 
 2. 端口占用问题
-
 如果您添加规则时 Nginx 无法启动，提示端口已被占用 (bind() failed)，请运行以下命令检查哪个进程占用了该端口：
 
 Bash
 
 sudo netstat -tuln | grep <端口号>
 3. 配置路径
-
 所有规则文件都存储在以下路径：
 
 主规则文件: /etc/nginx/conf.d/nsm/nsm-stream.conf
@@ -106,3 +128,4 @@ Bash
 sudo systemctl reload nginx
 📜 许可协议
 本项目遵循 MIT 协议。
+
