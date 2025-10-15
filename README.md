@@ -32,13 +32,11 @@ Markdown
 运行以下命令，完成所有环境配置和安装：
 
 ```bash
-确保在 Debian/Ubuntu/CentOS 系统上以 root 或 sudo 权限运行
+# 确保在 Debian/Ubuntu/CentOS 系统上以 root 或 sudo 权限运行
+sudo curl -fsSL [https://raw.githubusercontent.com/pansir0290/nginx-stream-manager/main/deploy.sh](https://raw.githubusercontent.com/pansir0290/nginx-stream-manager/main/deploy.sh) | bash
+🛑 请务必复制上方代码块中的完整命令，避免粘贴时命令不完整！
 
-#sudo curl -fsSL [https://raw.githubusercontent.com/pansir0290/nginx-stream-manager/main/deploy.sh](https://raw.githubusercontent.com/pansir0290/nginx-stream-manager/main/deploy.sh) | bash
-
-> **🛑 请务必复制上方代码块中的完整命令，避免粘贴时命令不完整！
-
-**步骤 2: 激活命令**
+步骤 2: 激活命令
 【重要】部署完成后，请执行此命令使 'nsm' 别名生效：
 
 Bash
@@ -140,3 +138,4 @@ Bash
 sudo systemctl reload nginx
 📜 许可协议
 本项目遵循 MIT 协议。
+
