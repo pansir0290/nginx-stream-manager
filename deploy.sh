@@ -5,7 +5,7 @@
 #      下载 manager.sh 并设置 nsm 命令别名。
 # -----------------------------------------------------------------------------
 
-set -e # 遇到任何错误立即退出
+set -e # 遇到任何错误立即退出（注意：在 cleanup_nginx_config 内部使用 || true 进行了局部容错）
 
 # 配置参数
 REPO_RAW_URL="https://raw.githubusercontent.com/pansir0290/nginx-stream-manager/main"
@@ -67,11 +67,11 @@ install_dependencies() {
     if [ "$OS" = "debian" ] || [ "$OS" = "ubuntu" ]; then
         sudo apt update
         
-        # 🎯 核心清理步骤：解决已知的 Nginx 包冲突和官方源 ABI 问题
+        # 🎯 核心清理步骤：解决已知的 Nginx 包冲突和旧版本 ABI 问题
         log_info "正在检查并强制清理所有 Nginx 相关包以解决依赖和官方源冲突..."
         
-        # 1. 强制移除所有与 Nginx 冲突的包，包括核心 Nginx 自身，以打破循环冲突
-        # 使用 --purge 确保彻底清除配置文件，防止冲突残留
+        # 1. 强制移除所有与 Nginx 冲突的包，以打破循环冲突
+        # 使用 --purge 确保彻底清除配置文件
         sudo apt purge -y nginx* nginx-full nginx-common libnginx-mod-stream &>/dev/null || true
         
         # 2. 强制解决依赖问题并清理残留
@@ -81,14 +81,15 @@ install_dependencies() {
         # 重新运行更新，确保包信息最新
         sudo apt update
         
-        # 3. 重新安装 Nginx 核心、基础依赖
+        # 3. 重新安装 Nginx 核心，让系统选择最兼容的版本
         sudo apt install -y curl vim sudo nginx net-tools iproute2
 
         # 核心修复: 确保安装 libnginx-mod-stream 包，包含 Stream SSL 模块
-        log_info "正在检查并安装 Nginx Stream 模块..."
+        log_info "正在检查并安装 Nginx Stream 模 块 ..."
         
-        # 尝试安装模块包，如果失败（如使用 Nginx 官方源），则忽略并警告
+        # 注意：对于官方 Nginx 源，Stream 模块可能内置。我们仍尝试安装 Debian 官方模块包。
         if ! dpkg -l | grep -q "libnginx-mod-stream"; then
+            # 使用 || true 确保即使 Nginx 官方源导致此包安装失败，脚本也继续运行
             sudo apt install -y libnginx-mod-stream || true
             if dpkg -l | grep -q "libnginx-mod-stream"; then
                 log_success "Nginx Stream 模块安装完成 (来自官方源或系统源)。"
@@ -110,7 +111,7 @@ install_dependencies() {
     fi
 }
 
-# 核心自愈功能：清除配置冲突并启动/重启 Nginx
+# 核心自愈功能：清除配置冲突并启动/重载 Nginx
 cleanup_nginx_config() {
     log_info "正在清理 Nginx 主配置文件中的重复或错误的 load_module 指令..."
     
@@ -126,19 +127,26 @@ cleanup_nginx_config() {
         log_info "未检测到冲突的 Stream 模 块 加 载 指 令 ， 跳 过 清 理 。"
     fi
     
-    # 无论是否清理，都要尝试启动/重启 Nginx (使用 restart 兼容性更好)
-    log_info "尝试启动或重启 Nginx 服务以确保环境就绪..."
+    # --- 核心服务启动逻辑优化 (容错处理) ---
+    log_info "尝试启用并启动 Nginx 服务以确保环境就绪..."
     
-    if sudo systemctl restart nginx 2>/dev/null; then
-        log_success "Nginx 服务启动/重启成功。环境已就绪。"
-        return 0
-    else
-        # 如果重启失败，首先测试配置是否正确，防止误报
-        if sudo nginx -t 2>/dev/null; then
-            log_error "Nginx 重启失败，但配置测试通过。请手动检查 Nginx 服务状态。部署脚本终止。"
+    # 1. 先进行配置测试。
+    if sudo nginx -t 2>/dev/null; then
+        log_success "Nginx 配置测试成功。"
+        
+        # 2. 尝试启用并重启 Nginx 服务
+        sudo systemctl enable nginx 2>/dev/null || true # 确保服务被启用
+        if sudo systemctl restart nginx 2>/dev/null; then
+            log_success "Nginx 服务启动/重启成功。环境已就绪。"
+            return 0 # 成功，继续执行后续脚本
         else
-            log_error "Nginx 重启失败，且配置测试失败。请立即运行 'sudo nginx -t' 手动检查配置错误。部署脚本终止。"
+            # 3. 如果重启失败，但配置测试成功，发出警告并允许继续部署 nsm。
+            log_warning "Nginx 服务重启失败。配置已清理完毕，但请手动检查服务状态：'sudo systemctl status nginx'。继续部署 nsm..."
+            return 0 # **关键容错：配置正确时，允许脚本继续安装 nsm**
         fi
+    else
+        # 配置测试失败，说明有配置语法错误，必须终止。
+        log_error "Nginx 重启失败，且配置测试失败。请立即运行 'sudo nginx -t' 手动检查配置错误。部署脚本终止。"
         return 1
     fi
 }
