@@ -525,31 +525,32 @@ show_banner() {
     echo -e ""
 }
 
-# 主菜单 (调用入口)
-main_menu_entry() {
-    check_root
-    check_encoding # 检查和修复编码问题 (如果检测到，会重新执行)
-    init_log
-    detect_os
-    init_config_dir # 修复了 stream 块冲突和 include 路径
-    
-    # 循环主菜单
-    while true; do
-        main_menu
-    done
-}
 
-# 脚本启动 (修复后的逻辑)
+# -----------------------------------------------------------------------------
+# 脚本启动 (重构后的安全启动逻辑)
+# -----------------------------------------------------------------------------
+
+# 如果提供了参数，则执行参数指定的函数并退出
 if [ "$1" = "init_config_dir" ]; then
     check_root
     init_config_dir
-    exit 0 # 成功执行后退出
+    exit 0
 elif [ "$1" = "install_components" ]; then
     check_root
     detect_os
     install_components
-    exit 0 # 成功执行后退出
-else
-    # 正常启动菜单入口
-    main_menu_entry
+    exit 0
 fi
+
+# 如果没有提供参数，则执行正常启动流程
+
+check_root
+check_encoding # 如果这里退出，deploy.sh 会失败，但这是正确行为
+init_log
+detect_os
+init_config_dir
+
+# 进入主循环
+while true; do
+    main_menu
+done
