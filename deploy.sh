@@ -139,7 +139,7 @@ cleanup_nginx_config() {
         else
             # 3. 如果重启失败，但配置测试成功，发出警告并允许继续。
             log_warning "Nginx 服务重启失败。配置已清理完毕，但请手动检查服务状态：'sudo systemctl status nginx'。继续部署 nsm..."
-            return 0 # **允许继续安装 nsm**
+            return 0 # 允许继续安装 nsm
         fi
     else
         # 配置测试失败，说明有配置语法错误，必须终止。
@@ -166,8 +166,8 @@ install_manager_script() {
 
 # 设置 nsm 别名
 setup_alias() {
-    # 修复：使用 -E 保留终端环境变量，解决颜色转义码显示问题
-    local ALIAS_CMD="alias nsm='sudo -E $INSTALL_PATH'" 
+    # 最终修复：移除 sudo/sudo -E，让 manager.sh 内部自己处理权限，解决颜色乱码问题
+    local ALIAS_CMD="alias nsm='$INSTALL_PATH'" 
     local PROFILE_FILES=(
         "/root/.bashrc"
         "/root/.zshrc"
@@ -189,7 +189,7 @@ setup_alias() {
     done
 
     if [ "$found" -eq 0 ]; then
-        log_warning "未能将别名添加到任何已知的 shell 配置文件中。请手动添加别名或直接运行 'sudo -E $INSTALL_PATH'"
+        log_warning "未能将别名添加到任何已知的 shell 配置文件中。请手动添加别名或直接运行 '$INSTALL_PATH'"
     fi
 
     log_success "部署完成！请运行 'source ~/.bashrc' (或 ~/.zshrc) 后再运行 'nsm' 启动管理工具。"
