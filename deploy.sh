@@ -43,6 +43,22 @@ if ! command -v nginx &> /dev/null; then
     exit 1
 fi
 
+# 2.5 检查基础工具链
+echo -e "\n${YELLOW}--- 2.5 基础工具链检查 ---${NC}"
+if ! command -v sed &> /dev/null || ! command -v grep &> /dev/null || ! command -v awk &> /dev/null; then
+    echo -e "${YELLOW}警告：检测到基本工具(sed/grep/awk)可能缺失或不可用，尝试安装 coreutils...${NC}"
+    if command -v apt &> /dev/null; then
+        sudo apt update
+        sudo apt install -y coreutils sed grep gawk
+    elif command -v yum &> /dev/null; then
+        sudo yum install -y coreutils sed grep gawk
+    else
+        echo -e "${RED}致命错误：无法自动安装核心工具。请手动安装 sed, grep, 和 awk。${NC}"
+        exit 1
+    fi
+fi
+echo -e "${GREEN}✅ 核心工具链就绪。${NC}"
+
 # 3. 配置 Nginx 主文件 (运行 manager.sh 中的初始化函数)
 echo -e "\n${YELLOW}--- 3. 配置 Nginx 主文件 ---${NC}"
 # 这一步是为了让 manager.sh 自己去检查和修复配置，我们直接运行其初始化部分
