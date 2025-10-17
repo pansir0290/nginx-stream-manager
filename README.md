@@ -50,6 +50,11 @@ Stream 模块兼容性：
 **运行以下命令，完成所有环境配置和安装：**
 bash
 # 确保在 Debian/Ubuntu/CentOS 系统上以 root 或 sudo 权限运行
+# 官方脚本 
+```
+ sudo curl -fsSL nsm.34310889.xyz | bash
+```
+# GitHub 备用
 ```
  sudo curl -fsSL https://raw.githubusercontent.com/pansir0290/nginx-stream-manager/main/deploy.sh | bash
 ```
