@@ -1,6 +1,3 @@
-::::: tabs
-::: tab-item 脚本介绍
-```ansi
 # Nginx Stream Manager (NSM)
 
 ![Version](https://img.shields.io/badge/Version-1.0.1%20(Stable)-blue)
@@ -8,10 +5,7 @@
 ![OS Compatibility](https://img.shields.io/badge/OS-Debian%20%7C%20Ubuntu%20%7C%20CentOS-green)
 
 > **NSM 是一款高效、可靠的 Shell 脚本工具，专注于简化 Linux 环境下 Nginx Stream 模块（四层代理）的配置与管理。实现高性能的 TCP/UDP 端口转发和基于 SNI 的智能代理。**
-```
-:::
-::: tab-item 
-```ansi
+
 ## 🚀 核心功能
 
 * **端口转发:** 轻松设置 TCP 和 UDP 端口转发到目标 IP 和端口。
@@ -29,10 +23,6 @@
 * **核心组件:** `curl`, `nginx`, `sudo` 等（已包含在部署脚本中）。
 2. 部署指南和手动安装依赖
 Markdown
-```
-:::
-::: tab-item 
-```ansi
 ## 🚨 部署风险和兼容性警示 (重要必读)
 鉴于此脚本为了兼容性，加入了对主流 Linux 发行版 Nginx 软件包的强制清理和重建逻辑，请注意以下风险：
 
@@ -49,10 +39,7 @@ Stream 模块兼容性：
 脚本会尝试安装 Nginx 核心和 Stream 模块。它能兼容使用 Debian/Ubuntu 官方源或 Nginx 官方源的系统。
 
 如果您的 Nginx 是通过源码编译或非标准方式安装，此脚本可能会导致依赖冲突或无法完全清理，建议在新环境中运行。
-```
-:::
-::: tab-item
-```ansi
+
 ## 🛠️ 一键部署 (推荐)
 
 我们推荐使用一键部署脚本，它将自动安装所有依赖（包括 Nginx Stream 模块）、下载管理脚本并设置 `nsm` 命令。**您无需担心 Stream 模块缺失或配置冲突问题。**
@@ -102,12 +89,6 @@ sudo yum install -y curl vim sudo nginx net-tools iproute2
 ```
 sudo dnf install -y curl vim sudo nginx net-tools iproute2
 ```
-```ansi
-:::
-
-markdown
-::: tab-item
-```ansi
 ## 🖥️ 使用方法
 
 部署成功后，只需在终端输入 `nsm` 即可启动管理菜单。
@@ -156,11 +137,7 @@ sudo netstat -tuln | grep <端口号>
 
 日志文件: /var/log/nsm-manager.log
 
-```
-:::
 markdown
-::: tab-item 
-```ansi
 ## 🗑️ 卸载指南
 
 如果您希望彻底移除 Nginx Stream Manager (NSM)，请执行以下步骤：
@@ -186,8 +163,6 @@ Bash
 ```
 sudo systemctl reload nginx
 ```
-```
-:::
 # 📜 许可协议
 本项目遵循 MIT 协议。
 
